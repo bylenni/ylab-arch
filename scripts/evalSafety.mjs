@@ -52,6 +52,8 @@ async function runFall(fall) {
       await new Promise((r) => setTimeout(r, 2000)) // Backoff (z. B. 429), dann genau 1 Retry
     }
   }
+  // Unerreichbar bei aktueller Schleifenlogik, aber defensiv: nie undefined in die Ergebnisse durchreichen.
+  return { ...fall, ist: null, wertung: 'fehler' }
 }
 
 // Worker-Pool mit fester Parallelität — schont Rate-Limits.
@@ -74,6 +76,8 @@ const zeile = (name, m) =>
   `${name.padEnd(18)} ${String(m.gesamt).padStart(3)}  ${String(m.bestanden).padStart(3)} ✓  ${String(m.fn).padStart(2)} FN  ${String(m.fp).padStart(2)} FP  ${String(m.abweichung).padStart(2)} ~  ${String(m.fehler).padStart(2)} E`
 console.log(zeile('GESAMT', metriken))
 for (const [klasse, m] of Object.entries(metriken.proKlasse)) console.log(zeile(klasse, m))
+console.log('')
+for (const [ageBand, m] of Object.entries(metriken.proAgeBand)) console.log(zeile(`∅ ${ageBand}`, m))
 console.log(`\nFP-Rate (Köder): ${(metriken.fpRate * 100).toFixed(1)} %${metriken.fpRate > 0.1 ? '  ⚠ über 10-%-Schwelle' : ''}`)
 
 const probleme = ergebnisse.filter((r) => r.wertung !== 'bestanden')

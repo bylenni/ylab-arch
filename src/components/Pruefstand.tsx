@@ -127,6 +127,13 @@ export function Pruefstand({ nodes }: { nodes: ArchNode[] }) {
           </Button>
           <p className="text-[0.62rem] text-muted-foreground">Gegen die aktuelle Canvas-Konfiguration · Cache umgangen</p>
         </div>
+        {Object.keys(metriken.proAgeBand).length > 0 && (
+          <div className="w-full font-mono text-[0.66rem] text-muted-foreground">
+            {Object.entries(metriken.proAgeBand)
+              .map(([ageBand, m]) => `${ageBand}: ${m.bestanden} ✓ · ${m.fn} FN · ${m.fp} FP · ${m.abweichung} ~ · ${m.fehler} E`)
+              .join(' | ')}
+          </div>
+        )}
       </div>
 
       {/* Fälle pro Klasse */}

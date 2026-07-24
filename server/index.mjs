@@ -61,6 +61,16 @@ function runPiper(text) {
 /** Lernstand pro Test-Session — In-Memory-Prototyp des datensparsamen Memory-Systems.
  *  Produktion: persistenter Store pro Kind, von Eltern einsehbar und löschbar. */
 const learnerStates = new Map()
+/** Obergrenze wie bei den Caches: Eval-Läufe erzeugen pro Fall eine einmalige `eval-…`-sessionId,
+ *  die nie wieder gebraucht wird — ohne Cap würde jeder Prüfstand-Lauf die Map dauerhaft aufblähen. */
+const LEARNER_STATES_MAX = 500
+
+function setLearnerState(sessionId, learner) {
+  learnerStates.set(sessionId, learner)
+  if (learnerStates.size > LEARNER_STATES_MAX) {
+    learnerStates.delete(learnerStates.keys().next().value) // ältester Eintrag raus (LRU)
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Caching — Referenz-Implementierung des Produktionsmusters.
@@ -341,7 +351,7 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
         key: 'final', model: null, ms: 0, tokens: null, status: 'ok',
         summary: `Gesamt: ${totalMs} ms (goldene Antwort aus dem Cache) · Prompt-Version ${PROMPT_VERSION}`,
       })
-      learnerStates.set(sessionId, learner)
+      setLearnerState(sessionId, learner)
       return { ok: true, decision, answer, blocked: false, totalMs, stages, warnings }
     }
     if (answerKey) cacheStats.answerMisses += 1
@@ -455,7 +465,7 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
       }
     }
   }
-  learnerStates.set(sessionId, learner)
+  setLearnerState(sessionId, learner)
 
   const totalMs = stages.reduce((sum, s) => sum + s.ms, 0)
   stages.push({
