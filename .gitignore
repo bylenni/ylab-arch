@@ -30,3 +30,4 @@ server/tts-venv/
 *.njsproj
 *.sln
 *.sw?
+server/tts-cache/

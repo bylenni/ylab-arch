@@ -8,7 +8,8 @@
 import http from 'node:http'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFile, unlink } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile, writeFile, unlink, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -59,6 +60,26 @@ function runPiper(text) {
 /** Lernstand pro Test-Session — In-Memory-Prototyp des datensparsamen Memory-Systems.
  *  Produktion: persistenter Store pro Kind, von Eltern einsehbar und löschbar. */
 const learnerStates = new Map()
+
+/* ------------------------------------------------------------------ */
+/* Caching — Referenz-Implementierung des Produktionsmusters.
+ * Grundregeln: Key = Hash ALLER ergebnisrelevanten Eingaben inkl. Versionen;
+ * Invalidierung über neue Keys (nie mutieren); Hits/Misses messen.          */
+/* ------------------------------------------------------------------ */
+
+const cacheStats = { ttsHits: 0, ttsMisses: 0, triageHits: 0, triageMisses: 0 }
+
+/** TTS-Cache auf Platte: identischer Text + identische Stimme = identisches Audio.
+ *  In Produktion: Objektspeicher/CDN + die häufigsten Bausteine auf der Box selbst. */
+const TTS_CACHE_DIR = join(SERVER_DIR, 'tts-cache')
+
+/** Triage-Cache im Speicher, NUR für kontextfreie Erst-Turns — mit Historie ist
+ *  dieselbe Äußerung nicht mehr dasselbe Klassifikationsproblem. LRU über Map-Ordnung. */
+const triageCache = new Map()
+const TRIAGE_CACHE_MAX = 500
+
+const normalizeUtterance = (text) =>
+  text.toLowerCase().trim().replace(/[!?.,;:]+/g, '').replace(/\s+/g, ' ')
 const API_KEY = process.env.OPENROUTER_API_KEY
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
@@ -205,24 +226,49 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
   const contextBlock = dialog.length
     ? `Bisheriger Dialog (zuletzt):\n${dialog.slice(-4).map((m) => `${m.role === 'assistant' ? 'Begleiter' : 'Kind'}: "${m.text.slice(0, 160)}"`).join('\n')}\n\n`
     : ''
-  const triageCall = await callModel({
-    model: triageModel,
-    system: TRIAGE_SYSTEM,
-    user: `${contextBlock}Aktuelle Äußerung des Kindes (${ageBand} Jahre): "${utterance}"`,
-    maxTokens: 200,
-  })
-  const triage = parseJson(triageCall.text)
-  if (!triage) {
+  // Cache nur für kontextfreie Erst-Turns; Key trägt Modell, Prompt-Version und Altersband.
+  const triageCacheKey = dialog.length === 0
+    ? `${triageModel}|${PROMPT_VERSION}|${ageBand}|${normalizeUtterance(utterance)}`
+    : null
+  let triage = null
+  if (triageCacheKey && triageCache.has(triageCacheKey)) {
+    cacheStats.triageHits += 1
+    triage = triageCache.get(triageCacheKey)
+    triageCache.delete(triageCacheKey)
+    triageCache.set(triageCacheKey, triage) // LRU-Refresh: zuletzt genutzt nach hinten
     stages.push({
-      key: 'triage', model: triageModel, ms: triageCall.ms, tokens: triageCall.tokens,
-      status: 'risk', summary: `Kein parsbares JSON: "${triageCall.text.slice(0, 80)}" → fail-closed: sensibel`,
+      key: 'triage', model: triageModel, ms: 0, tokens: null,
+      status: triage.risiko || triage.emotion ? 'risk' : 'ok',
+      summary: `⚡ Cache-Hit · Intent: ${triage.intent} · Risiko: ${triage.risiko} · Emotion: ${triage.emotion} · Konfidenz: ${triage.konfidenz}`,
     })
   } else {
-    stages.push({
-      key: 'triage', model: triageModel, ms: triageCall.ms, tokens: triageCall.tokens,
-      status: triage.risiko || triage.emotion ? 'risk' : 'ok',
-      summary: `Intent: ${triage.intent} · Risiko: ${triage.risiko} · Emotion: ${triage.emotion} · Konfidenz: ${triage.konfidenz} — ${triage.begruendung ?? ''}`,
+    cacheStats.triageMisses += 1
+    const triageCall = await callModel({
+      model: triageModel,
+      system: TRIAGE_SYSTEM,
+      user: `${contextBlock}Aktuelle Äußerung des Kindes (${ageBand} Jahre): "${utterance}"`,
+      maxTokens: 200,
     })
+    triage = parseJson(triageCall.text)
+    if (!triage) {
+      stages.push({
+        key: 'triage', model: triageModel, ms: triageCall.ms, tokens: triageCall.tokens,
+        status: 'risk', summary: `Kein parsbares JSON: "${triageCall.text.slice(0, 80)}" → fail-closed: sensibel`,
+      })
+    } else {
+      stages.push({
+        key: 'triage', model: triageModel, ms: triageCall.ms, tokens: triageCall.tokens,
+        status: triage.risiko || triage.emotion ? 'risk' : 'ok',
+        summary: `Intent: ${triage.intent} · Risiko: ${triage.risiko} · Emotion: ${triage.emotion} · Konfidenz: ${triage.konfidenz} — ${triage.begruendung ?? ''}`,
+      })
+      // Nur parsebare Ergebnisse cachen — Fehlerzustände nie konservieren
+      if (triageCacheKey) {
+        triageCache.set(triageCacheKey, triage)
+        if (triageCache.size > TRIAGE_CACHE_MAX) {
+          triageCache.delete(triageCache.keys().next().value) // ältester Eintrag raus (LRU)
+        }
+      }
+    }
   }
 
   // Erfolgssignal: Hat das Kind die zuletzt gestellte Aufgabe beantwortet?
@@ -457,6 +503,7 @@ const server = http.createServer(async (req, res) => {
         promptVersion: PROMPT_VERSION,
         stt: sttReady ? 'whisper.cpp large-v3-turbo (lokal)' : null,
         tts: TTS_URL ? 'extern (TTS_URL)' : piperAvailable() ? `Piper ${PIPER_VOICE} (lokal)` : 'macOS say „Anna" (Platzhalter)',
+        cache: cacheStats,
       }),
     )
   }
@@ -545,6 +592,28 @@ const server = http.createServer(async (req, res) => {
       const started = performance.now()
       let audio
       let engine
+
+      // Cache-Key: Stimme + Engine-Version + exakter Text → identisches Audio
+      const voiceId = TTS_URL
+        ? `ext:${process.env.TTS_VOICE ?? 'default'}`
+        : piperAvailable()
+          ? `piper:${PIPER_VOICE}`
+          : 'say:Anna'
+      const ttsKey = createHash('sha256').update(`${voiceId}|${text}`).digest('hex')
+      const cacheFile = join(TTS_CACHE_DIR, `${ttsKey}.wav`)
+      if (existsSync(cacheFile)) {
+        cacheStats.ttsHits += 1
+        audio = await readFile(cacheFile)
+        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
+          JSON.stringify({
+            ok: true, audio: audio.toString('base64'),
+            ms: Math.round(performance.now() - started),
+            engine: `⚡ Cache (${voiceId})`, cached: true,
+          }),
+        )
+      }
+      cacheStats.ttsMisses += 1
+
       if (TTS_URL) {
         const ttsRes = await fetch(`${TTS_URL}/v1/audio/speech`, {
           method: 'POST',
@@ -566,8 +635,12 @@ const server = http.createServer(async (req, res) => {
         await unlink(tmpFile).catch(() => {})
         engine = 'macOS say „Anna" — Platzhalter'
       }
+      // Ins Cache schreiben — erst nachdem die Synthese sicher gelungen ist
+      await mkdir(TTS_CACHE_DIR, { recursive: true })
+      await writeFile(cacheFile, audio)
+
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
-        JSON.stringify({ ok: true, audio: audio.toString('base64'), ms: Math.round(performance.now() - started), engine }),
+        JSON.stringify({ ok: true, audio: audio.toString('base64'), ms: Math.round(performance.now() - started), engine, cached: false }),
       )
     } catch (err) {
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
