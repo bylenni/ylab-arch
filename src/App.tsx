@@ -18,10 +18,12 @@ import { simulate } from './simulate'
 import type { SimResult, SimStep } from './simulate'
 import { ArchNodeView } from './components/ArchNodeView'
 import { Inspector } from './components/Inspector'
-import { TestPanel } from './components/TestPanel'
+import { ChatPanel } from './components/ChatPanel'
+import { RunTimeline } from './components/RunTimeline'
 import { Arena } from './components/Arena'
 import { Logo } from './components/Logo'
 import { Button } from './components/ui'
+import { useResizable } from './hooks/useResizable'
 import type { Scenario } from './scenarios'
 import { loadScenarios, saveScenarios, applyScenarioToNodes } from './scenarios'
 
@@ -119,6 +121,8 @@ export default function App() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [tab, setTab] = useState<'test' | 'inspector'>('test')
   const [view, setView] = useState<'canvas' | 'arena'>('canvas')
+  const [timelineWidth, startTimelineResize] = useResizable('arch-studio-w-timeline', 300, 220, 520)
+  const [chatWidth, startChatResize] = useResizable('arch-studio-w-chat', 400, 300, 640)
   const [scenarios, setScenarios] = useState<Scenario[]>(() => loadScenarios())
   const [dark, setDark] = useState(initialDark)
   const [simResult, setSimResult] = useState<SimResult | null>(null)
@@ -575,11 +579,20 @@ export default function App() {
           </ReactFlow>
         </div>
 
-        <aside className="flex w-[360px] shrink-0 flex-col border-l bg-sidebar text-sidebar-foreground max-md:max-h-[45vh] max-md:w-full max-md:border-l-0 max-md:border-t">
+        {/* Resize-Griff: Verlauf/Komponente-Panel */}
+        <div
+          onPointerDown={startTimelineResize}
+          title="Ziehen zum Vergrößern/Verkleinern"
+          className="w-1 shrink-0 cursor-col-resize border-l bg-transparent transition-colors hover:bg-ring/40 max-md:hidden"
+        />
+        <aside
+          style={{ width: timelineWidth }}
+          className="flex shrink-0 flex-col bg-sidebar text-sidebar-foreground max-md:max-h-[40vh] max-md:w-full! max-md:border-t"
+        >
           <div className="flex border-b">
             {(
               [
-                ['test', 'Testen'],
+                ['test', 'Verlauf'],
                 ['inspector', 'Komponente'],
               ] as const
             ).map(([id, label]) => (
@@ -601,14 +614,7 @@ export default function App() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {tab === 'test' ? (
-              <TestPanel
-                result={simResult}
-                conversation={conversation}
-                visibleSteps={visibleSteps}
-                running={running}
-                onRun={runSimulation}
-                onReset={resetRun}
-              />
+              <RunTimeline result={simResult} visibleSteps={visibleSteps} running={running} />
             ) : (
               <Inspector
                 node={selectedNode}
@@ -620,6 +626,19 @@ export default function App() {
               />
             )}
           </div>
+        </aside>
+
+        {/* Resize-Griff: Chat-Panel */}
+        <div
+          onPointerDown={startChatResize}
+          title="Ziehen zum Vergrößern/Verkleinern"
+          className="w-1 shrink-0 cursor-col-resize border-l bg-transparent transition-colors hover:bg-ring/40 max-md:hidden"
+        />
+        <aside
+          style={{ width: chatWidth }}
+          className="flex shrink-0 flex-col border-l-0 bg-background max-md:max-h-[50vh] max-md:w-full! max-md:border-t"
+        >
+          <ChatPanel conversation={conversation} running={running} onRun={runSimulation} onReset={resetRun} />
         </aside>
       </div>
       )}
