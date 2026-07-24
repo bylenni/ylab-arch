@@ -27,6 +27,7 @@ import {
   firstNumber,
   outcomeDirective,
 } from './teachingPlanner.mjs'
+import { decideRoute, normalizeUtterance } from './router.mjs'
 
 const PORT = process.env.API_PORT ?? 8787
 const execFileAsync = promisify(execFile)
@@ -85,8 +86,6 @@ const TRIAGE_CACHE_MAX = 500
 const answerCache = new Map()
 const ANSWER_CACHE_MAX = 200
 
-const normalizeUtterance = (text) =>
-  text.toLowerCase().trim().replace(/[!?.,;:]+/g, '').replace(/\s+/g, ' ')
 const API_KEY = process.env.OPENROUTER_API_KEY
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
@@ -294,20 +293,8 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
     if (outcome) recordOutcome(learner, outcome.skill, outcome.type === 'richtig')
   }
 
-  // 2. Deterministischer Router (fail-closed, wenn Triage unlesbar).
-  // Die Wortzahl-Regel gilt NUR für den ersten Turn: ohne Kontext ist ein Einzelwort („Papa")
-  // verdächtig — im laufenden Gespräch sind Einwort-Antworten („Ja", „weiter", „sieben") normal,
-  // dort entscheidet die Triage-Konfidenz, die den Dialogkontext kennt.
-  // Ein erkanntes Antwort-Ergebnis („sieben!") überschreibt nur „unklar" — nie „sensibel".
-  const tooShortWithoutContext = dialog.length === 0 && utterance.trim().split(/\s+/).length < 2
-  let decision = !triage
-    ? 'sensibel'
-    : triage.risiko || triage.emotion
-      ? 'sensibel'
-      : Number(triage.konfidenz ?? 1) < 0.5 || tooShortWithoutContext
-        ? 'unklar'
-        : 'normal'
-  if (outcome && decision === 'unklar') decision = 'normal'
+  // 2. Deterministischer Router (fail-closed, wenn Triage unlesbar) — server/router.mjs.
+  const decision = decideRoute({ triage, utterance, dialogLength: dialog.length, outcome })
   stages.push({
     key: 'router', model: null, ms: 1, tokens: null,
     status: decision === 'sensibel' ? 'risk' : decision === 'unklar' ? 'warn' : 'ok',
