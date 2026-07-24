@@ -297,3 +297,23 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .typing-dot { animation: none; opacity: 0.6; }
 }
+
+/* ---------- Dezente Scrollbars überall ---------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: gray transparent;
+}
+
+/* Fallback für ältere WebKit-Browser ohne scrollbar-color-Support */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: gray;
+  border-radius: 4px;
+}
