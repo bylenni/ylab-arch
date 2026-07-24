@@ -27,7 +27,7 @@ export const STRATEGIES = {
 /** Grobe Skill-Erkennung. Ziel: feingranulare Skill-Taxonomie aus dem Triage-Klassifikator. */
 export function detectSkill(utterance) {
   const t = utterance.toLowerCase()
-  if (/plus|minus|mal |geteilt|rechn|zähl|zahlen/.test(t)) return 'mathe.grundrechnen'
+  if (/plus|minus|mal |geteilt|rechn|(^|[^a-zäöüß])zähl|zahlen/.test(t)) return 'mathe.grundrechnen'
   if (/buchstab|schreibt man|lesen|abc/.test(t)) return 'schrift.buchstaben'
   if (/englisch|heißt .* auf|übersetz/.test(t)) return 'sprache.englisch'
   return null
