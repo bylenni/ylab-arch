@@ -215,7 +215,7 @@ const splitList = (value) =>
 /* Pipeline                                                            */
 /* ------------------------------------------------------------------ */
 
-async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatterns = '', systemPrompt = '', sessionId = 'default', plannerEnabled = true, history = [] }) {
+async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatterns = '', systemPrompt = '', sessionId = 'default', plannerEnabled = true, history = [], noCache = false }) {
   const stages = []
   const warnings = ['Live-Kette ohne STT/TTS — reale Sprach-Latenz kommt oben drauf.']
   const triageModel = models.triage || 'google/gemini-2.5-flash-lite'
@@ -232,8 +232,8 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
   const contextBlock = dialog.length
     ? `Bisheriger Dialog (zuletzt):\n${dialog.slice(-4).map((m) => `${m.role === 'assistant' ? 'Begleiter' : 'Kind'}: "${m.text.slice(0, 160)}"`).join('\n')}\n\n`
     : ''
-  // Cache nur für kontextfreie Erst-Turns; Key trägt Modell, Prompt-Version und Altersband.
-  const triageCacheKey = dialog.length === 0
+  // Cache nur für kontextfreie Erst-Turns; Eval-Läufe (noCache) messen die Kette, nie den Cache.
+  const triageCacheKey = !noCache && dialog.length === 0
     ? `${triageModel}|${PROMPT_VERSION}|${ageBand}|${normalizeUtterance(utterance)}`
     : null
   let triage = null
@@ -318,7 +318,7 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
     // Antwort-Cache: Der Key trägt ALLES, was die Antwort beeinflusst — Modelle, System-Prompt,
     // Safety-Config, Altersband. Ein Prompt-Edit ändert den Key und invalidiert damit von selbst.
     const answerCacheable =
-      dialog.length === 0 && !outcome && (triage?.intent === 'wissensfrage' || triage?.intent === 'smalltalk')
+      !noCache && dialog.length === 0 && !outcome && (triage?.intent === 'wissensfrage' || triage?.intent === 'smalltalk')
     const answerKey = answerCacheable
       ? createHash('sha256')
           .update([mainModel, safetyModel, systemPrompt || 'default', blockPatterns, ageBand, PROMPT_VERSION].join('|'))
