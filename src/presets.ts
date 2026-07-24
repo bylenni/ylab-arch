@@ -86,6 +86,49 @@ const FT_PROMPT_EBENE =
 const FT_PLANNER =
   'Kein LLM-Training! Der Planner lernt als Policy: Contextual Bandit auf (Zustand, Strategie, Ergebnis)-Tupeln aus dem Event-Log — Statistik, keine Gewichte. Reward = Selbstlösung/Retention, explizit NICHT Nutzungsdauer. Die sprachliche Ausführung der Strategien lernt das Haupt-LLM per LoRA.'
 
+/** Illustrativer Kern des Teaching Planners (Stufe 1) — voller Code: server/teachingPlanner.mjs. */
+const PLANNER_CODE = `// Teaching Planner — Stufe 1: deterministisches Regelwerk (kein LLM!)
+// Kern: reine Funktion (Altersband, Skill, Lernstand, Frust) -> Strategie.
+// Stufe 2 ersetzt genau DIESE Funktion durch eine gelernte Policy (Contextual
+// Bandit auf (Zustand, Strategie, Ergebnis)-Tupeln) — Interface bleibt gleich.
+
+function planStrategy({ ageBand, skill, state, frustration }) {
+  const s = state.skills[skill] ?? { exposures: 0, consecutiveFrustrations: 0, mastered: false }
+
+  // Regel 1 — Frustbremse schlägt ALLES. Nie weiter sokratisieren, wenn das Kind kämpft.
+  if (frustration || s.consecutiveFrustrations >= 2)
+    return { strategie: 'loesung_mit_ermutigung', begruendung: 'Frustsignal — Sokratik abbrechen.' }
+
+  // Regel 2 — Gefestigt? Nicht langweilen: Schwierigkeit steigern.
+  if (s.mastered || s.exposures >= 3)
+    return { strategie: 'schwierigkeit_steigern', begruendung: 'Zone der nächsten Entwicklung.' }
+
+  // Regel 3 — Wiederkehr: festigen durch Variation statt identischer Wiederholung.
+  if (s.exposures >= 1)
+    return { strategie: 'wiederholen_variation', begruendung: \`\${s.exposures + 1}. Kontakt.\` }
+
+  // Regel 4 — Erstkontakt: altersabhängig.
+  return ageBand === '4-5'
+    ? { strategie: 'gestuetzter_hinweis',    begruendung: 'Erstkontakt, vor-schriftlich.' }
+    : { strategie: 'sokratische_gegenfrage', begruendung: 'Erstkontakt, Schulkind.' }
+}
+
+// Datensparsamer Lernstand — nur Zähler pro Skill, KEINE Transkripte.
+function recordOutcome(state, skill, success) {           // das Erfolgssignal (Reward für Stufe 2)
+  const s = skillState(state, skill)
+  if (success) { s.successes += 1; s.consecutiveFrustrations = 0; if (s.successes >= 3) s.mastered = true }
+  else         { s.consecutiveFrustrations += 1 }
+}
+
+// Strategie -> Direktive: der Planner sagt WIE, das Haupt-LLM formuliert AUS.
+const DIRECTIVES = {
+  sokratische_gegenfrage:  'Stelle genau EINE Gegenfrage, die das Kind selbst zur Lösung führt. Lösung nicht verraten.',
+  gestuetzter_hinweis:     'Gib einen bildhaften Hinweis mit Alltagsdingen (Äpfel, Finger). Lösung noch nicht verraten.',
+  loesung_mit_ermutigung:  'Nenne die Lösung freundlich, erkläre sie in einem Satz. Ermutige — kein Tadel.',
+  wiederholen_variation:   'Beantworte kindgerecht und stelle danach eine ähnliche, gleich schwere Aufgabe.',
+  schwierigkeit_steigern:  'Lobe kurz und biete eine etwas schwierigere Aufgabe zum selben Thema an.',
+}`
+
 const FT_DETERMINISTISCH =
   'Nie trainieren — bewusst symbolisch (Regeln, Pattern, PII via Presidio): teilt keinen einzigen Fehlermodus mit neuronalen Netzen. Das ist die dritte Fehler-Spezies neben den zwei Modellfamilien.'
 
@@ -295,6 +338,7 @@ export const targetArchitecture: Architecture = {
       kind: 'content',
       latencyMs: 50,
       finetuning: FT_PLANNER,
+      code: PLANNER_CODE,
       description: 'Eigene Komponente mit Lernstands-Memory und Altersbändern. Sokratik mit „einfach mal antworten"-Option.',
     }),
     n('sysprompt', -150, 780, {

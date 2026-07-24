@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { ArchNode, ArchEdge, NodeKind } from '../types'
 import { KIND_META, EDGE_CONDITIONS } from '../types'
 import { useOpenRouterModels, formatPrice } from '../hooks/useOpenRouterModels'
+import { openCodeModal } from './CodeModal'
 import { Button, Input, Label, Select, Textarea } from './ui'
 
 /** Dropdown über den OpenRouter-Katalog, gruppiert nach Anbieter, mit $-Preisen pro 1M Tokens. */
@@ -148,6 +149,29 @@ export function Inspector({ node, edge, onNodeChange, onEdgeConditionChange, onD
           value={data.finetuning ?? ''}
           placeholder="Wird diese Komponente trainiert? Womit, wie viel Daten, was kostet es — oder bewusst nicht trainieren?"
           onChange={(ev) => onNodeChange(node.id, { finetuning: ev.target.value })}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="node-code">&lt;/&gt; Referenz-Code</Label>
+          {data.code && (
+            <button
+              type="button"
+              onClick={() => openCodeModal(data.label, data.code ?? '')}
+              className="cursor-pointer font-mono text-[0.62rem] text-muted-foreground underline hover:text-foreground"
+            >
+              als Modal öffnen
+            </button>
+          )}
+        </div>
+        <Textarea
+          id="node-code"
+          rows={data.code ? 8 : 3}
+          value={data.code ?? ''}
+          placeholder="Referenz-Code dieser Komponente. Erscheint als </>-Button auf dem Canvas-Knoten."
+          className="font-mono text-xs"
+          onChange={(ev) => onNodeChange(node.id, { code: ev.target.value })}
         />
       </div>
 

@@ -22,6 +22,8 @@ export interface ArchNodeData extends Record<string, unknown> {
   description: string
   /** Trainings-/Finetuning-Plan für diese Komponente (🎓 auf dem Canvas, editierbar im Inspector). */
   finetuning?: string
+  /** Referenz-Code der Komponente (</> auf dem Canvas öffnet ein Modal, editierbar im Inspector). */
+  code?: string
   latencyMs: number
   /** Frei editierbare Konfiguration; spezielle Schlüssel steuern den Simulator:
    *  triage:  riskWords, emotionWords, clarifyMinWords

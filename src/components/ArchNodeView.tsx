@@ -2,6 +2,7 @@ import { Handle, Position } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
 import type { ArchNode } from '../types'
 import { KIND_META } from '../types'
+import { openCodeModal } from './CodeModal'
 
 export function ArchNodeView({ data, selected }: NodeProps<ArchNode>) {
   const meta = KIND_META[data.kind]
@@ -24,6 +25,19 @@ export function ArchNodeView({ data, selected }: NodeProps<ArchNode>) {
           {meta.label}
         </span>
         <span className="flex items-center gap-1.5">
+          {data.code && (
+            <button
+              type="button"
+              title="Code ansehen"
+              onClick={(ev) => {
+                ev.stopPropagation()
+                openCodeModal(data.label, data.code ?? '')
+              }}
+              className="nodrag cursor-pointer rounded border border-border px-1 font-mono text-[0.6rem] text-muted-foreground hover:border-ring hover:text-foreground"
+            >
+              &lt;/&gt;
+            </button>
+          )}
           {data.finetuning && (
             <span title={`Finetuning-Plan:\n${data.finetuning}`} className="cursor-help text-[0.7rem]">
               🎓

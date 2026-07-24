@@ -23,6 +23,7 @@ import { RunTimeline } from './components/RunTimeline'
 import { Arena } from './components/Arena'
 import { CostOverlay } from './components/CostOverlay'
 import type { CostStage } from './components/CostOverlay'
+import { CodeModal } from './components/CodeModal'
 import { Logo } from './components/Logo'
 import { Button } from './components/ui'
 import { useResizable } from './hooks/useResizable'
@@ -31,7 +32,7 @@ import type { Scenario } from './scenarios'
 import { loadScenarios, saveScenarios, applyScenarioToNodes } from './scenarios'
 
 const nodeTypes = { arch: ArchNodeView }
-const STORAGE_PREFIX = 'arch-studio-v4:'
+const STORAGE_PREFIX = 'arch-studio-v5:'
 const THEME_KEY = 'arch-studio-theme'
 
 export type RunMode = 'heuristik' | 'live'
@@ -488,6 +489,7 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
+      <CodeModal />
       <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-2.5">
         <div className="flex items-center">
           <Logo className="h-6 w-auto text-foreground" />
