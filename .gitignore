@@ -31,3 +31,4 @@ server/tts-venv/
 *.sln
 *.sw?
 server/tts-cache/
+eval-reports/
