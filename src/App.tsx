@@ -21,9 +21,12 @@ import { Inspector } from './components/Inspector'
 import { ChatPanel } from './components/ChatPanel'
 import { RunTimeline } from './components/RunTimeline'
 import { Arena } from './components/Arena'
+import { CostOverlay } from './components/CostOverlay'
+import type { CostStage } from './components/CostOverlay'
 import { Logo } from './components/Logo'
 import { Button } from './components/ui'
 import { useResizable } from './hooks/useResizable'
+import { useOpenRouterModels } from './hooks/useOpenRouterModels'
 import type { Scenario } from './scenarios'
 import { loadScenarios, saveScenarios, applyScenarioToNodes } from './scenarios'
 
@@ -115,6 +118,11 @@ function initialDark(): boolean {
 export default function App() {
   const [presetId, setPresetId] = useState<'mvp' | 'ziel'>('mvp')
   const initial = useMemo(() => loadArchitecture('mvp'), [])
+  const orModels = useOpenRouterModels()
+  const priceOf = useMemo(() => {
+    const map = new Map((orModels ?? []).map((m) => [m.id, { in: m.in, out: m.out }]))
+    return (id: string) => map.get(id)
+  }, [orModels])
   const [nodes, setNodes, onNodesChange] = useNodesState<ArchNode>(initial.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -126,6 +134,8 @@ export default function App() {
   const [scenarios, setScenarios] = useState<Scenario[]>(() => loadScenarios())
   const [dark, setDark] = useState(initialDark)
   const [simResult, setSimResult] = useState<SimResult | null>(null)
+  const [costStages, setCostStages] = useState<CostStage[] | null>(null)
+  const [costCached, setCostCached] = useState(false)
   const [conversation, setConversation] = useState<ChatMessage[]>([])
   const [visibleSteps, setVisibleSteps] = useState(0)
   const [running, setRunning] = useState(false)
@@ -347,6 +357,12 @@ export default function App() {
         return
       }
 
+      // Kosten-Overlay aus den gemessenen Tokens des Turns speisen
+      setCostStages(
+        data.stages.map((s) => ({ key: s.key, label: s.key, model: s.model, tokens: s.tokens })),
+      )
+      setCostCached(data.stages.every((s) => !s.tokens || (s.tokens.in === 0 && s.tokens.out === 0)))
+
       const decision = data.decision ?? 'normal'
       const nodeForStage = (stage: LiveStage): ArchNode | undefined => {
         if (stage.key === 'script' && decision === 'unklar') {
@@ -439,6 +455,8 @@ export default function App() {
     timersRef.current = []
     setSimResult(null)
     setConversation([])
+    setCostStages(null)
+    setCostCached(false)
     setVisibleSteps(0)
     setRunning(false)
   }, [])
@@ -577,6 +595,7 @@ export default function App() {
             <MiniMap pannable zoomable />
             <Controls />
           </ReactFlow>
+          <CostOverlay stages={costStages} cached={costCached} priceOf={priceOf} />
         </div>
 
         {/* Resize-Griff: Verlauf/Komponente-Panel */}

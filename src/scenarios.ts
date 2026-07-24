@@ -104,7 +104,9 @@ export function buildRunPayload(scenario: Scenario, utterance: string, ageBand: 
 
 /* ---------------- Kosten ---------------- */
 
-const TURNS_PER_MONTH = 1100
+/** Nutzungsprofil für die Kosten-Hochrechnung: 5 h/Woche ≈ 21,7 h/Monat × ~30 Turns/h. */
+export const HOURS_PER_WEEK = 5
+export const TURNS_PER_MONTH = Math.round((HOURS_PER_WEEK * 52 / 12) * 30)
 
 export interface RunStage {
   model: string | null
