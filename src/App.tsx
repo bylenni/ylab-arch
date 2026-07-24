@@ -489,14 +489,8 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-2.5">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center">
           <Logo className="h-6 w-auto text-foreground" />
-          <div className="border-l border-border pl-3">
-            <h1 className="text-sm font-bold tracking-tight">Architektur-Studio</h1>
-            <p className="font-mono text-[0.62rem] uppercase tracking-widest text-muted-foreground">
-              Sprach-KI-Begleiter · 4–7 Jahre
-            </p>
-          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
