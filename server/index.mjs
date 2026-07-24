@@ -67,7 +67,7 @@ const learnerStates = new Map()
  * Invalidierung über neue Keys (nie mutieren); Hits/Misses messen.          */
 /* ------------------------------------------------------------------ */
 
-const cacheStats = { ttsHits: 0, ttsMisses: 0, triageHits: 0, triageMisses: 0 }
+const cacheStats = { ttsHits: 0, ttsMisses: 0, triageHits: 0, triageMisses: 0, answerHits: 0, answerMisses: 0 }
 
 /** TTS-Cache auf Platte: identischer Text + identische Stimme = identisches Audio.
  *  In Produktion: Objektspeicher/CDN + die häufigsten Bausteine auf der Box selbst. */
@@ -77,6 +77,13 @@ const TTS_CACHE_DIR = join(SERVER_DIR, 'tts-cache')
  *  dieselbe Äußerung nicht mehr dasselbe Klassifikationsproblem. LRU über Map-Ordnung. */
 const triageCache = new Map()
 const TRIAGE_CACHE_MAX = 500
+
+/** Antwort-Cache („goldene Antworten"): überspringt Prompt-Assembly, Haupt-LLM UND Safety.
+ *  Nur bereits GEPRÜFTE Antworten landen hier (Cache konserviert Safety, umgeht sie nie).
+ *  Bewusst NICHT gecacht: Lernfragen (Antwort hängt vom Lernstand ab), Geschichten
+ *  (Vielfalt ist Produktqualität), alles mit Kontext oder Erfolgssignal. */
+const answerCache = new Map()
+const ANSWER_CACHE_MAX = 200
 
 const normalizeUtterance = (text) =>
   text.toLowerCase().trim().replace(/[!?.,;:]+/g, '').replace(/\s+/g, ' ')
@@ -321,6 +328,37 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
     answer = SCRIPTED_CLARIFY
     stages.push({ key: 'script', model: null, ms: 1, tokens: null, status: 'warn', summary: 'Rückfrage statt Rateversuch.' })
   } else {
+    // Antwort-Cache: Der Key trägt ALLES, was die Antwort beeinflusst — Modelle, System-Prompt,
+    // Safety-Config, Altersband. Ein Prompt-Edit ändert den Key und invalidiert damit von selbst.
+    const answerCacheable =
+      dialog.length === 0 && !outcome && (triage?.intent === 'wissensfrage' || triage?.intent === 'smalltalk')
+    const answerKey = answerCacheable
+      ? createHash('sha256')
+          .update([mainModel, safetyModel, systemPrompt || 'default', blockPatterns, ageBand, PROMPT_VERSION].join('|'))
+          .digest('hex')
+          .slice(0, 16) + '|' + normalizeUtterance(utterance)
+      : null
+
+    if (answerKey && answerCache.has(answerKey)) {
+      cacheStats.answerHits += 1
+      const cached = answerCache.get(answerKey)
+      answerCache.delete(answerKey)
+      answerCache.set(answerKey, cached) // LRU-Refresh
+      answer = cached.answer
+      stages.push({
+        key: 'main', model: mainModel, ms: 0, tokens: null, status: 'ok',
+        summary: '⚡ Antwort-Cache-Hit — Prompt-Assembly, Haupt-LLM und Safety übersprungen (Antwort wurde bereits geprüft ausgeliefert).',
+      })
+      const totalMs = stages.reduce((sum, s) => sum + s.ms, 0)
+      stages.push({
+        key: 'final', model: null, ms: 0, tokens: null, status: 'ok',
+        summary: `Gesamt: ${totalMs} ms (goldene Antwort aus dem Cache) · Prompt-Version ${PROMPT_VERSION}`,
+      })
+      learnerStates.set(sessionId, learner)
+      return { ok: true, decision, answer, blocked: false, totalMs, stages, warnings }
+    }
+    if (answerKey) cacheStats.answerMisses += 1
+
     // 3. Teaching Planner — Erfolgssignal hat Vorrang, sonst normale Strategie-Wahl bei Lernfragen
     let plannerDirective = ''
     if (plannerEnabled && outcome) {
@@ -406,6 +444,14 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
     if (blocked) {
       answer = SCRIPTED_FALLBACK
       stages.push({ key: 'fallback', model: null, ms: 1, tokens: null, status: 'warn', summary: 'Kuratierte Ersatzantwort ausgespielt (fail-closed).' })
+    }
+
+    // Antwort-Cache befüllen — NUR nach bestandener Safety-Prüfung (Cache konserviert Freigaben)
+    if (answerKey && !blocked) {
+      answerCache.set(answerKey, { answer })
+      if (answerCache.size > ANSWER_CACHE_MAX) {
+        answerCache.delete(answerCache.keys().next().value)
+      }
     }
 
     // 6. Neue Erwartung merken: Welche Aufgabe wurde dem Kind gerade gestellt?
