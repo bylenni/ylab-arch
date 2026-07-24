@@ -115,4 +115,9 @@ describe('Signal-Heuristiken', () => {
     expect(detectSkill('Zähl mal bis zehn')).toBe('mathe.grundrechnen')
     expect(detectSkill('Erzähl was vom Ritter')).toBe(null)
   })
+
+  it('detectSkill erkennt zusammengesetzte Zähl-Verben', () => {
+    expect(detectSkill('Kannst du die Äpfel abzählen?')).toBe('mathe.grundrechnen')
+    expect(detectSkill('Erzähl was vom Ritter')).toBe(null)
+  })
 })
