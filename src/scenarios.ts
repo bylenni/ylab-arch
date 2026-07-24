@@ -104,9 +104,14 @@ export function buildRunPayload(scenario: Scenario, utterance: string, ageBand: 
 
 /* ---------------- Kosten ---------------- */
 
-/** Nutzungsprofil für die Kosten-Hochrechnung: 5 h/Woche ≈ 21,7 h/Monat × ~30 Turns/h. */
-export const HOURS_PER_WEEK = 5
-export const TURNS_PER_MONTH = Math.round((HOURS_PER_WEEK * 52 / 12) * 30)
+/** Nutzungsprofil: geschätzte Turns pro Interaktionsstunde (Frage-Modus dichter, Geschichten dünner). */
+export const TURNS_PER_HOUR = 30
+export const DEFAULT_HOURS_PER_WEEK = 5
+
+/** Turns/Monat aus Stunden/Woche: h/Woche × (52/12) Wochen/Monat × Turns/Stunde. */
+export function turnsPerMonth(hoursPerWeek: number): number {
+  return Math.round(((hoursPerWeek * 52) / 12) * TURNS_PER_HOUR)
+}
 
 export interface RunStage {
   model: string | null
@@ -117,6 +122,7 @@ export interface RunStage {
 export function costOfRun(
   stages: RunStage[],
   priceOf: (modelId: string) => { in: number; out: number } | undefined,
+  turns: number = turnsPerMonth(DEFAULT_HOURS_PER_WEEK),
 ): { perTurn: number; perMonth: number } {
   let perTurn = 0
   for (const stage of stages) {
@@ -125,7 +131,7 @@ export function costOfRun(
     if (!price) continue
     perTurn += (stage.tokens.in / 1e6) * price.in + (stage.tokens.out / 1e6) * price.out
   }
-  return { perTurn, perMonth: perTurn * TURNS_PER_MONTH }
+  return { perTurn, perMonth: perTurn * turns }
 }
 
 export function formatUsd(value: number): string {
