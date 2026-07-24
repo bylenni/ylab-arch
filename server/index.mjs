@@ -62,13 +62,16 @@ function runPiper(text) {
  *  Produktion: persistenter Store pro Kind, von Eltern einsehbar und löschbar. */
 const learnerStates = new Map()
 /** Obergrenze wie bei den Caches: Eval-Läufe erzeugen pro Fall eine einmalige `eval-…`-sessionId,
- *  die nie wieder gebraucht wird — ohne Cap würde jeder Prüfstand-Lauf die Map dauerhaft aufblähen. */
+ *  die nie wieder gebraucht wird — ohne Cap würde jeder Prüfstand-Lauf die Map dauerhaft aufblähen.
+ *  Achtung: Eviction ist FIFO (kein Nutzungs-Refresh) — bei sehr vielen Eval-Läufen ohne Neustart
+ *  kann auch eine aktive Live-Session rausfallen und ihren Lernstand verlieren. Für das Dev-Studio
+ *  akzeptiert; Produktion braucht ohnehin einen persistenten Store. */
 const LEARNER_STATES_MAX = 500
 
 function setLearnerState(sessionId, learner) {
   learnerStates.set(sessionId, learner)
   if (learnerStates.size > LEARNER_STATES_MAX) {
-    learnerStates.delete(learnerStates.keys().next().value) // ältester Eintrag raus (LRU)
+    learnerStates.delete(learnerStates.keys().next().value) // ältester Eintrag raus (FIFO)
   }
 }
 
