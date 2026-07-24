@@ -21,6 +21,7 @@ import { Inspector } from './components/Inspector'
 import { ChatPanel } from './components/ChatPanel'
 import { RunTimeline } from './components/RunTimeline'
 import { Arena } from './components/Arena'
+import { Pruefstand } from './components/Pruefstand'
 import { CostOverlay } from './components/CostOverlay'
 import type { CostStage } from './components/CostOverlay'
 import { CodeModal } from './components/CodeModal'
@@ -129,7 +130,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [tab, setTab] = useState<'test' | 'inspector'>('test')
-  const [view, setView] = useState<'canvas' | 'arena'>('canvas')
+  const [view, setView] = useState<'canvas' | 'arena' | 'pruefstand'>('canvas')
   const [timelineWidth, startTimelineResize] = useResizable('arch-studio-w-timeline', 300, 220, 520)
   const [chatWidth, startChatResize] = useResizable('arch-studio-w-chat', 400, 300, 640)
   const [scenarios, setScenarios] = useState<Scenario[]>(() => loadScenarios())
@@ -497,7 +498,7 @@ export default function App() {
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-md border bg-muted p-0.5">
-            {(['canvas', 'arena'] as const).map((id) => (
+            {(['canvas', 'arena', 'pruefstand'] as const).map((id) => (
               <button
                 key={id}
                 type="button"
@@ -508,7 +509,7 @@ export default function App() {
                   view === id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
                 ].join(' ')}
               >
-                {id === 'canvas' ? 'Canvas' : '⚔ Arena'}
+                {id === 'canvas' ? 'Canvas' : id === 'arena' ? '⚔ Arena' : '🛡 Prüfstand'}
               </button>
             ))}
           </div>
@@ -571,6 +572,8 @@ export default function App() {
           currentNodes={nodes}
           onLoadToCanvas={loadScenarioToCanvas}
         />
+      ) : view === 'pruefstand' ? (
+        <Pruefstand nodes={nodes} />
       ) : (
       <div className="flex min-h-0 flex-1 max-md:flex-col">
         <div className="relative min-w-0 flex-1">
