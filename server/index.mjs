@@ -18,8 +18,13 @@ import {
   detectSkill,
   detectFrustration,
   recordExposure,
+  recordOutcome,
   emptyLearnerState,
   directiveFor,
+  extractExpectedAnswer,
+  containsNumber,
+  firstNumber,
+  outcomeDirective,
 } from './teachingPlanner.mjs'
 
 const PORT = process.env.API_PORT ?? 8787
@@ -120,7 +125,7 @@ const SCRIPTED_FALLBACK =
 /* OpenRouter                                                          */
 /* ------------------------------------------------------------------ */
 
-async function callModel({ model, system, user, maxTokens = 400 }) {
+async function callModel({ model, system, user, history = [], maxTokens = 400 }) {
   const started = performance.now()
   const res = await fetch(OPENROUTER_URL, {
     method: 'POST',
@@ -135,6 +140,7 @@ async function callModel({ model, system, user, maxTokens = 400 }) {
       max_tokens: maxTokens,
       messages: [
         { role: 'system', content: system },
+        ...history.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.text ?? '') })),
         { role: 'user', content: user },
       ],
       // Anbieter ausschließen, die Prompts zum Training verwenden würden
@@ -182,18 +188,27 @@ const splitList = (value) =>
 /* Pipeline                                                            */
 /* ------------------------------------------------------------------ */
 
-async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatterns = '', systemPrompt = '', sessionId = 'default', plannerEnabled = true }) {
+async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatterns = '', systemPrompt = '', sessionId = 'default', plannerEnabled = true, history = [] }) {
   const stages = []
   const warnings = ['Live-Kette ohne STT/TTS — reale Sprach-Latenz kommt oben drauf.']
   const triageModel = models.triage || 'google/gemini-2.5-flash-lite'
   const mainModel = models.main || 'meta-llama/llama-3.3-70b-instruct'
   const safetyModel = models.safety || 'openai/gpt-4o-mini'
 
-  // 1. Triage
+  // Gesprächshistorie: letzte 8 Turns, bereinigt
+  const dialog = (Array.isArray(history) ? history : [])
+    .filter((m) => m && typeof m.text === 'string' && m.text.trim())
+    .slice(-8)
+    .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: m.text.slice(0, 1200) }))
+
+  // 1. Triage — mit Dialogkontext, sonst ist „Erzähl weiter!" nicht klassifizierbar
+  const contextBlock = dialog.length
+    ? `Bisheriger Dialog (zuletzt):\n${dialog.slice(-4).map((m) => `${m.role === 'assistant' ? 'Begleiter' : 'Kind'}: "${m.text.slice(0, 160)}"`).join('\n')}\n\n`
+    : ''
   const triageCall = await callModel({
     model: triageModel,
     system: TRIAGE_SYSTEM,
-    user: `Äußerung des Kindes (${ageBand} Jahre): "${utterance}"`,
+    user: `${contextBlock}Aktuelle Äußerung des Kindes (${ageBand} Jahre): "${utterance}"`,
     maxTokens: 200,
   })
   const triage = parseJson(triageCall.text)
@@ -210,18 +225,36 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
     })
   }
 
-  // 2. Deterministischer Router (fail-closed, wenn Triage unlesbar)
-  const decision = !triage
+  // Erfolgssignal: Hat das Kind die zuletzt gestellte Aufgabe beantwortet?
+  // Deterministische Prüfung (Ziffer/Zahlwort) — kein LLM-Urteil. Einmalig, dann verfällt die Erwartung.
+  const learner = learnerStates.get(sessionId) ?? emptyLearnerState()
+  const pending = learner.pendingExpectation ?? null
+  learner.pendingExpectation = null
+  let outcome = null
+  if (pending && typeof pending.expected === 'number') {
+    if (containsNumber(utterance, pending.expected)) {
+      outcome = { type: 'richtig', expected: pending.expected, skill: pending.skill }
+    } else {
+      const said = firstNumber(utterance)
+      if (said !== null) outcome = { type: 'falsch', expected: pending.expected, said, skill: pending.skill }
+    }
+    if (outcome) recordOutcome(learner, outcome.skill, outcome.type === 'richtig')
+  }
+
+  // 2. Deterministischer Router (fail-closed, wenn Triage unlesbar).
+  // Ein erkanntes Antwort-Ergebnis („sieben!") überschreibt nur „unklar" — nie „sensibel".
+  let decision = !triage
     ? 'sensibel'
     : triage.risiko || triage.emotion
       ? 'sensibel'
       : Number(triage.konfidenz ?? 1) < 0.5 || utterance.trim().split(/\s+/).length < 2
         ? 'unklar'
         : 'normal'
+  if (outcome && decision === 'unklar') decision = 'normal'
   stages.push({
     key: 'router', model: null, ms: 1, tokens: null,
     status: decision === 'sensibel' ? 'risk' : decision === 'unklar' ? 'warn' : 'ok',
-    summary: `Deterministische Entscheidung: „${decision}"`,
+    summary: `Deterministische Entscheidung: „${decision}"${outcome ? ' (Antwort auf gestellte Aufgabe erkannt)' : ''}`,
   })
 
   let answer = ''
@@ -238,17 +271,25 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
     answer = SCRIPTED_CLARIFY
     stages.push({ key: 'script', model: null, ms: 1, tokens: null, status: 'warn', summary: 'Rückfrage statt Rateversuch.' })
   } else {
-    // 3. Teaching Planner — nur wenn als Komponente vorhanden und nur bei Lernfragen
+    // 3. Teaching Planner — Erfolgssignal hat Vorrang, sonst normale Strategie-Wahl bei Lernfragen
     let plannerDirective = ''
-    if (plannerEnabled && triage?.intent === 'lernen') {
-      const state = learnerStates.get(sessionId) ?? emptyLearnerState()
+    if (plannerEnabled && outcome) {
+      plannerDirective = outcomeDirective(outcome)
+      const s = learner.skills[outcome.skill]
+      stages.push({
+        key: 'planner', model: null, ms: 1, tokens: null,
+        status: outcome.type === 'richtig' ? 'ok' : 'warn',
+        summary: outcome.type === 'richtig'
+          ? `✓ Erfolgssignal: Kind hat „${outcome.expected}" selbst gelöst (deterministisch geprüft) · ${s?.successes ?? 0} Erfolge${s?.mastered ? ' · Skill gefestigt' : ''}`
+          : `✗ Fehlversuch: Kind sagte ${outcome.said}, richtig wäre ${outcome.expected} · sanfte Korrektur, ${s?.consecutiveFrustrations ?? 0}. Fehlversuch in Folge`,
+      })
+    } else if (plannerEnabled && triage?.intent === 'lernen') {
       const skill = detectSkill(utterance)
       const frustration = detectFrustration(utterance)
-      const plan = planStrategy({ ageBand, skill, state, frustration })
-      recordExposure(state, skill, frustration)
-      learnerStates.set(sessionId, state)
+      const plan = planStrategy({ ageBand, skill, state: learner, frustration })
+      recordExposure(learner, skill, frustration)
       plannerDirective = directiveFor(plan)
-      const exposures = skill ? state.skills[skill].exposures : 0
+      const exposures = skill ? learner.skills[skill].exposures : 0
       stages.push({
         key: 'planner', model: null, ms: 1, tokens: null, status: 'ok',
         summary: `Skill: ${skill ?? '—'} (${exposures}. Kontakt) · Strategie: ${plan.strategie} — ${plan.begruendung}`,
@@ -267,11 +308,12 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
         : `Server-Default-Prompt (kein Prompt-Knoten mit Inhalt gefunden), Altersband ${ageBand}.`,
     })
 
-    // 4. Haupt-LLM
+    // 5. Haupt-LLM — mit Gesprächshistorie
     const mainCall = await callModel({
       model: mainModel,
       system: effectivePrompt,
       user: utterance,
+      history: dialog,
       maxTokens: 400,
     })
     answer = mainCall.text
@@ -315,7 +357,22 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
       answer = SCRIPTED_FALLBACK
       stages.push({ key: 'fallback', model: null, ms: 1, tokens: null, status: 'warn', summary: 'Kuratierte Ersatzantwort ausgespielt (fail-closed).' })
     }
+
+    // 6. Neue Erwartung merken: Welche Aufgabe wurde dem Kind gerade gestellt?
+    // Vorrang hat die vom Begleiter NEU gestellte Aufgabe, sonst die Frage des Kindes selbst.
+    if (plannerEnabled && !blocked && (triage?.intent === 'lernen' || outcome)) {
+      const skill = detectSkill(utterance) ?? outcome?.skill ?? 'mathe.grundrechnen'
+      const expected = extractExpectedAnswer(answer) ?? (triage?.intent === 'lernen' ? extractExpectedAnswer(utterance) : null)
+      if (expected !== null) {
+        learner.pendingExpectation = { skill, expected }
+        stages[stages.length - 1] && stages.push({
+          key: 'planner', model: null, ms: 0, tokens: null, status: 'ok',
+          summary: `Erwartung gemerkt: nächste Kindesantwort wird deterministisch gegen „${expected}" geprüft.`,
+        })
+      }
+    }
   }
+  learnerStates.set(sessionId, learner)
 
   const totalMs = stages.reduce((sum, s) => sum + s.ms, 0)
   stages.push({

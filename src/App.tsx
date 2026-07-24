@@ -32,6 +32,13 @@ const THEME_KEY = 'arch-studio-theme'
 export type RunMode = 'heuristik' | 'live'
 export type AgeBand = '4-5' | '6-7'
 
+/** Eine Nachricht im Multi-Turn-Testgespräch. */
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  text: string
+  meta?: string
+}
+
 interface LiveStage {
   key: 'triage' | 'router' | 'script' | 'planner' | 'prompt' | 'main' | 'safety' | 'fallback' | 'final'
   model: string | null
@@ -115,6 +122,7 @@ export default function App() {
   const [scenarios, setScenarios] = useState<Scenario[]>(() => loadScenarios())
   const [dark, setDark] = useState(initialDark)
   const [simResult, setSimResult] = useState<SimResult | null>(null)
+  const [conversation, setConversation] = useState<ChatMessage[]>([])
   const [visibleSteps, setVisibleSteps] = useState(0)
   const [running, setRunning] = useState(false)
   const timersRef = useRef<number[]>([])
@@ -286,7 +294,7 @@ export default function App() {
   }, [])
 
   const runLive = useCallback(
-    async (utterance: string, ageBand: AgeBand) => {
+    async (utterance: string, ageBand: AgeBand, history: ChatMessage[]) => {
       timersRef.current.forEach((t) => window.clearTimeout(t))
       timersRef.current = []
       setSimResult(null)
@@ -298,6 +306,7 @@ export default function App() {
         utterance,
         ageBand,
         sessionId: sessionId(),
+        history: history.map((m) => ({ role: m.role, text: m.text })),
         // Architektur-Treue: Planner läuft nur, wenn er als Komponente auf dem Canvas existiert
         plannerEnabled: nodes.some((node) => node.data.label.toLowerCase().includes('planner')),
         systemPrompt: firstOfKind('prompt')?.data.config.prompt,
@@ -388,6 +397,13 @@ export default function App() {
         decision, answer: data.answer ?? '', blocked: data.blocked ?? false,
         warnings: data.warnings ?? [],
       })
+      if (data.answer) {
+        const answerText = data.answer
+        setConversation((prev) => [
+          ...prev,
+          { role: 'assistant', text: answerText, meta: `${decision}${data.blocked ? ' · blockiert' : ''} · ${data.totalMs} ms` },
+        ])
+      }
     },
     [nodes, edges, playSteps],
   )
@@ -395,19 +411,30 @@ export default function App() {
   const runSimulation = useCallback(
     (utterance: string, mode: RunMode, ageBand: AgeBand) => {
       setTab('test')
+      // Historie = Gespräch VOR diesem Turn; die aktuelle Äußerung schickt der Server separat
+      const history = conversation
+      setConversation((prev) => [...prev, { role: 'user', text: utterance }])
       if (mode === 'live') {
-        void runLive(utterance, ageBand)
+        void runLive(utterance, ageBand, history)
         return
       }
-      playSteps(simulate(nodes, edges, utterance, ageBand))
+      const result = simulate(nodes, edges, utterance, ageBand)
+      playSteps(result)
+      if (result.answer) {
+        setConversation((prev) => [
+          ...prev,
+          { role: 'assistant', text: result.answer, meta: `${result.decision} · ${result.totalMs} ms · Heuristik` },
+        ])
+      }
     },
-    [nodes, edges, playSteps, runLive],
+    [nodes, edges, playSteps, runLive, conversation],
   )
 
   const resetRun = useCallback(() => {
     timersRef.current.forEach((t) => window.clearTimeout(t))
     timersRef.current = []
     setSimResult(null)
+    setConversation([])
     setVisibleSteps(0)
     setRunning(false)
   }, [])
@@ -576,6 +603,7 @@ export default function App() {
             {tab === 'test' ? (
               <TestPanel
                 result={simResult}
+                conversation={conversation}
                 visibleSteps={visibleSteps}
                 running={running}
                 onRun={runSimulation}

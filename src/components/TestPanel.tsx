@@ -1,12 +1,13 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SimResult, SimStep } from '../simulate'
 import { testPresets } from '../presets'
-import type { RunMode, AgeBand } from '../App'
+import type { RunMode, AgeBand, ChatMessage } from '../App'
 import { PttRecorder } from '../lib/recorder'
 import { Button, Label, Select, Textarea } from './ui'
 
 interface Props {
   result: SimResult | null
+  conversation: ChatMessage[]
   visibleSteps: number
   running: boolean
   onRun: (utterance: string, mode: RunMode, ageBand: AgeBand) => void
@@ -31,10 +32,22 @@ const stepBorder: Record<SimStep['status'], string> = {
   risk: 'border-l-status-risk',
 }
 
-export function TestPanel({ result, visibleSteps, running, onRun, onReset }: Props) {
+export function TestPanel({ result, conversation, visibleSteps, running, onRun, onReset }: Props) {
   const [utterance, setUtterance] = useState('Warum ist der Himmel blau?')
   const [mode, setMode] = useState<RunMode>('heuristik')
   const [ageBand, setAgeBand] = useState<AgeBand>('4-5')
+  const chatEndRef = useRef<HTMLDivElement>(null)
+
+  // Ans Gesprächsende scrollen, wenn neue Nachrichten kommen
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [conversation.length])
+
+  const sendUtterance = () => {
+    if (!utterance.trim()) return
+    onRun(utterance, mode, ageBand)
+    setUtterance('')
+  }
   const [recording, setRecording] = useState(false)
   const [sttInfo, setSttInfo] = useState<string | null>(null)
   const [ttsInfo, setTtsInfo] = useState<string | null>(null)
@@ -149,8 +162,42 @@ export function TestPanel({ result, visibleSteps, running, onRun, onReset }: Pro
       <p className="text-xs text-muted-foreground">
         {mode === 'heuristik'
           ? 'Heuristik: Keyword-Regeln simulieren die Modelle — testet Routing-Logik und Latenzbudget offline.'
-          : 'Live: Die Äußerung läuft über OpenRouter durch echte Modelle. Welches Modell pro Step läuft, steht in der Konfiguration der Triage-, LLM- und Safety-Knoten (Schlüssel „model").'}
+          : 'Live: echtes Multi-Turn-Gespräch — die Historie geht mit an die Pipeline. Bei Mathefragen merkt sich der Planner die Lösung und prüft die nächste Antwort deterministisch (Erfolgssignal).'}
       </p>
+
+      {conversation.length > 0 && (
+        <div className="flex max-h-72 flex-col gap-2 overflow-y-auto rounded-lg border bg-background/60 p-3">
+          {conversation.map((msg, index) => (
+            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className={[
+                  'max-w-[85%] rounded-lg px-3 py-2 text-sm',
+                  msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted',
+                ].join(' ')}
+              >
+                <p>{msg.text}</p>
+                {msg.meta && (
+                  <p className={`mt-1 font-mono text-[0.62rem] ${msg.role === 'user' ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                    {msg.meta}
+                  </p>
+                )}
+                {msg.role === 'assistant' && (
+                  <button
+                    type="button"
+                    className="mt-1 cursor-pointer font-mono text-[0.62rem] text-muted-foreground underline hover:text-foreground"
+                    disabled={ttsBusy}
+                    onClick={() => speakAnswer(msg.text)}
+                  >
+                    ▶ anhören
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {running && <p className="text-xs text-muted-foreground">…</p>}
+          <div ref={chatEndRef} />
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         {testPresets.map((preset) => (
@@ -197,13 +244,13 @@ export function TestPanel({ result, visibleSteps, running, onRun, onReset }: Pro
           variant="primary"
           className="flex-1"
           disabled={running || utterance.trim() === ''}
-          onClick={() => onRun(utterance, mode, ageBand)}
+          onClick={sendUtterance}
         >
-          {running ? (mode === 'live' ? 'Modelle antworten …' : 'Läuft …') : '▶ Testlauf starten'}
+          {running ? (mode === 'live' ? 'Modelle antworten …' : 'Läuft …') : conversation.length > 0 ? '▶ Senden' : '▶ Gespräch starten'}
         </Button>
-        {result && (
-          <Button onClick={onReset} title="Ergebnis und Pfad-Hervorhebung zurücksetzen" aria-label="Testlauf zurücksetzen">
-            ↺ Zurücksetzen
+        {(result || conversation.length > 0) && (
+          <Button onClick={onReset} title="Gespräch, Lernstand-Erwartung und Pfad-Hervorhebung zurücksetzen" aria-label="Neues Gespräch">
+            ↺ Neues Gespräch
           </Button>
         )}
       </div>
