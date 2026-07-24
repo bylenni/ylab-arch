@@ -543,9 +543,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/testset') {
     // Testset fürs Prüfstand-UI — direkt aus dem Repo-File, damit UI und CLI dieselbe Wahrheit sehen.
-    const raw = readFileSync(join(SERVER_DIR, 'testsets', 'safety.v1.json'), 'utf8')
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(raw)
+    try {
+      const raw = readFileSync(join(SERVER_DIR, 'testsets', 'safety.v1.json'), 'utf8')
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(raw)
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'Testset nicht lesbar' }))
+    }
     return
   }
 
