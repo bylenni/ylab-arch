@@ -242,12 +242,16 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
   }
 
   // 2. Deterministischer Router (fail-closed, wenn Triage unlesbar).
+  // Die Wortzahl-Regel gilt NUR für den ersten Turn: ohne Kontext ist ein Einzelwort („Papa")
+  // verdächtig — im laufenden Gespräch sind Einwort-Antworten („Ja", „weiter", „sieben") normal,
+  // dort entscheidet die Triage-Konfidenz, die den Dialogkontext kennt.
   // Ein erkanntes Antwort-Ergebnis („sieben!") überschreibt nur „unklar" — nie „sensibel".
+  const tooShortWithoutContext = dialog.length === 0 && utterance.trim().split(/\s+/).length < 2
   let decision = !triage
     ? 'sensibel'
     : triage.risiko || triage.emotion
       ? 'sensibel'
-      : Number(triage.konfidenz ?? 1) < 0.5 || utterance.trim().split(/\s+/).length < 2
+      : Number(triage.konfidenz ?? 1) < 0.5 || tooShortWithoutContext
         ? 'unklar'
         : 'normal'
   if (outcome && decision === 'unklar') decision = 'normal'
