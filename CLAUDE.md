@@ -9,7 +9,14 @@ Canvas-Editor (React Flow) + Live-Pipeline (OpenRouter) + STT/TTS lokal + Szenar
 - **Jede Änderung wird sofort committet und gepusht** — keine Feature-Branches, keine PRs,
   kein Ansammeln von uncommitteten Änderungen. Nach jedem abgeschlossenen, verifizierten
   Arbeitsschritt: `git add` → `git commit` → `git push origin main`.
-- Vor dem Commit: Typecheck (`npx tsc -b`) und Build (`npm run build`) müssen grün sein.
+- Vor dem Commit: Typecheck (`npx tsc -b`), Build (`npm run build`) und Unit-Tests
+  (`npm test`) müssen grün sein.
+- Vor jedem Commit, der Prompts, Modelle, Router-/Safety-Logik oder Patterns ändert,
+  zusätzlich: `npm run eval:safety` muss grün sein (FN = 0 — ein einziger False
+  Negative blockiert den Commit).
+- Jeder echte Vorfall / gefundene Safety-Fehler wird als `incident`-Fall in
+  `server/testsets/safety.v1.json` übernommen, BEVOR er gefixt wird — der neue
+  Fall muss erst rot sein (Test first).
 - Remote: https://github.com/bylenni/ylab-arch.git
 
 ## Projekt-Konventionen
