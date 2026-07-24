@@ -10,7 +10,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, unlink, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -539,6 +539,14 @@ const server = http.createServer(async (req, res) => {
         cache: cacheStats,
       }),
     )
+  }
+
+  if (req.method === 'GET' && req.url === '/api/testset') {
+    // Testset fürs Prüfstand-UI — direkt aus dem Repo-File, damit UI und CLI dieselbe Wahrheit sehen.
+    const raw = readFileSync(join(SERVER_DIR, 'testsets', 'safety.v1.json'), 'utf8')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(raw)
+    return
   }
 
   // Speech-to-Text: Base64-WAV → lokaler whisper.cpp-Server
