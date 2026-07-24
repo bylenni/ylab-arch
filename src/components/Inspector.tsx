@@ -1,0 +1,195 @@
+import { useMemo } from 'react'
+import type { ArchNode, ArchEdge, NodeKind } from '../types'
+import { KIND_META, EDGE_CONDITIONS } from '../types'
+import { useOpenRouterModels, formatPrice } from '../hooks/useOpenRouterModels'
+import { Button, Input, Label, Select, Textarea } from './ui'
+
+/** Dropdown über den OpenRouter-Katalog, gruppiert nach Anbieter, mit $-Preisen pro 1M Tokens. */
+function ModelSelect({ id, value, onChange }: { id: string; value: string; onChange: (next: string) => void }) {
+  const models = useOpenRouterModels()
+
+  const groups = useMemo(() => {
+    if (!models) return []
+    const byProvider = new Map<string, typeof models>()
+    for (const model of models) {
+      const provider = model.id.includes('/') ? model.id.split('/')[0] : 'sonstige'
+      const list = byProvider.get(provider) ?? []
+      list.push(model)
+      byProvider.set(provider, list)
+    }
+    return [...byProvider.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [models])
+
+  if (models === null) {
+    return <Input id={id} value={value} readOnly title="Modellkatalog wird geladen …" />
+  }
+  if (models.length === 0) {
+    // Katalog nicht erreichbar (z. B. Backend aus) → Freitext bleibt möglich
+    return <Input id={id} value={value} onChange={(ev) => onChange(ev.target.value)} />
+  }
+
+  const known = models.some((model) => model.id === value)
+  return (
+    <Select id={id} value={value} onChange={(ev) => onChange(ev.target.value)}>
+      {!known && value && <option value={value}>{value} (nicht im Katalog)</option>}
+      {groups.map(([provider, list]) => (
+        <optgroup key={provider} label={provider}>
+          {list.map((model) => (
+            <option key={model.id} value={model.id} title={`${model.name} · Kontext ${model.ctx.toLocaleString('de-DE')}`}>
+              {model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id} · ${formatPrice(model.in)}/${formatPrice(model.out)}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </Select>
+  )
+}
+
+interface Props {
+  node: ArchNode | null
+  edge: ArchEdge | null
+  onNodeChange: (id: string, patch: Partial<ArchNode['data']>) => void
+  onEdgeConditionChange: (id: string, condition: string) => void
+  onDeleteNode: (id: string) => void
+  onDeleteEdge: (id: string) => void
+}
+
+export function Inspector({ node, edge, onNodeChange, onEdgeConditionChange, onDeleteNode, onDeleteEdge }: Props) {
+  if (edge) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <p className="text-sm text-muted-foreground">
+          Kante — die Bedingung steuert, welchen Weg Router und Safety-Prüfung nehmen.
+        </p>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="edge-condition">Bedingung</Label>
+          <Select
+            id="edge-condition"
+            value={String(edge.label ?? '')}
+            onChange={(ev) => onEdgeConditionChange(edge.id, ev.target.value)}
+          >
+            {EDGE_CONDITIONS.map((c) => (
+              <option key={c} value={c}>
+                {c === '' ? '(keine — immer folgen)' : c}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <Button variant="destructive" onClick={() => onDeleteEdge(edge.id)}>
+          Kante löschen
+        </Button>
+      </div>
+    )
+  }
+
+  if (!node) {
+    return (
+      <div className="p-4">
+        <p className="text-sm text-muted-foreground">
+          Wähle eine Komponente oder Kante auf der Zeichenfläche, um sie zu bearbeiten. Neue Verbindungen ziehst du von
+          der Unterkante eines Knotens zur Oberkante des nächsten.
+        </p>
+      </div>
+    )
+  }
+
+  const { data } = node
+  const configEntries = Object.entries(data.config)
+
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="node-name">Name</Label>
+        <Input id="node-name" value={data.label} onChange={(ev) => onNodeChange(node.id, { label: ev.target.value })} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="node-kind">Typ</Label>
+          <Select
+            id="node-kind"
+            value={data.kind}
+            onChange={(ev) => onNodeChange(node.id, { kind: ev.target.value as NodeKind })}
+          >
+            {(Object.keys(KIND_META) as NodeKind[]).map((kind) => (
+              <option key={kind} value={kind}>
+                {KIND_META[kind].label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="node-latency">Latenz (ms)</Label>
+          <Input
+            id="node-latency"
+            type="number"
+            min={0}
+            value={data.latencyMs}
+            onChange={(ev) => onNodeChange(node.id, { latencyMs: Math.max(0, Number(ev.target.value) || 0) })}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="node-description">Beschreibung</Label>
+        <Textarea
+          id="node-description"
+          rows={4}
+          value={data.description}
+          onChange={(ev) => onNodeChange(node.id, { description: ev.target.value })}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="node-finetuning">🎓 Finetuning-Plan</Label>
+        <Textarea
+          id="node-finetuning"
+          rows={data.finetuning && data.finetuning.length > 120 ? 6 : 3}
+          value={data.finetuning ?? ''}
+          placeholder="Wird diese Komponente trainiert? Womit, wie viel Daten, was kostet es — oder bewusst nicht trainieren?"
+          onChange={(ev) => onNodeChange(node.id, { finetuning: ev.target.value })}
+        />
+      </div>
+
+      {configEntries.length > 0 && (
+        <div className="flex flex-col gap-3 border-t pt-4">
+          <p className="text-xs text-muted-foreground">
+            Konfiguration — <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.7rem]">riskWords</code>,{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.7rem]">emotionWords</code>,{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.7rem]">clarifyMinWords</code> und{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.7rem]">blockPatterns</code> steuern den
+            Test-Simulator.
+          </p>
+          {configEntries.map(([key, value]) => (
+            <div className="flex flex-col gap-1.5" key={key}>
+              <Label htmlFor={`cfg-${key}`}>{key}</Label>
+              {key === 'model' ? (
+                <ModelSelect
+                  id={`cfg-${key}`}
+                  value={value}
+                  onChange={(next) => onNodeChange(node.id, { config: { ...data.config, [key]: next } })}
+                />
+              ) : (
+                <Textarea
+                  id={`cfg-${key}`}
+                  rows={value.length > 400 ? 14 : value.length > 60 ? 3 : 1}
+                  value={value}
+                  onChange={(ev) => onNodeChange(node.id, { config: { ...data.config, [key]: ev.target.value } })}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        <Button onClick={() => onNodeChange(node.id, { config: { ...data.config, neuerSchluessel: '' } })}>
+          + Konfigurationsfeld
+        </Button>
+        <Button variant="destructive" onClick={() => onDeleteNode(node.id)}>
+          Komponente löschen
+        </Button>
+      </div>
+    </div>
+  )
+}
