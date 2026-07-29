@@ -21,6 +21,11 @@ const KEY_LABEL: Record<string, string> = {
 
 const HOURS_KEY = 'arch-studio-hours-per-week'
 
+/** Preis unbekannt (z. B. Melious ohne Katalog-Preise, in/out = -1) — einzige Stelle,
+ *  an der das geprüft wird, damit Stage-Zeile und Summenzeile nie auseinanderlaufen. */
+const isPriceUnknown = (price: { in: number; out: number } | undefined): boolean =>
+  !price || price.in < 0 || price.out < 0
+
 /** Dauerhaftes Kosten-Overlay auf dem Canvas — Hochrechnung aus dem letzten Live-Turn,
  *  Nutzungsprofil (Std/Woche) direkt einstellbar. */
 export function CostOverlay({ stages, cached, priceOf }: Props) {
@@ -35,6 +40,13 @@ export function CostOverlay({ stages, cached, priceOf }: Props) {
   const turns = turnsPerMonth(hours)
   const billable = (stages ?? []).filter((s) => s.model && s.tokens && (s.tokens.in > 0 || s.tokens.out > 0))
   const cost = costOfRun(billable, priceOf, turns)
+  // Summenzeile darf "$0" nie mit "kostenlos" verwechselbar machen: fehlen bei ALLEN
+  // billable-Stages die Katalogpreise (Normalfall bei reiner Melious-Pipeline ohne
+  // Preis-Feed), zeigen wir "?" statt einer (falschen) Null. Fehlt nur ein Teil, bleibt
+  // die Summe stehen, wird aber als Untergrenze ("≥") gekennzeichnet.
+  const unknownCount = billable.filter((s) => isPriceUnknown(s.model ? priceOf(s.model) : undefined)).length
+  const allUnknown = billable.length > 0 && unknownCount === billable.length
+  const partiallyUnknown = unknownCount > 0 && !allUnknown
 
   return (
     <div className="pointer-events-auto absolute bottom-4 left-4 z-10 w-64 rounded-lg border border-border bg-card/95 p-3 text-card-foreground shadow-md backdrop-blur">
@@ -74,19 +86,24 @@ export function CostOverlay({ stages, cached, priceOf }: Props) {
       ) : (
         <>
           <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-lg font-bold tabular-nums">{formatUsd(cost.perMonth)}</span>
+            <span className="text-lg font-bold tabular-nums">
+              {allUnknown ? '?' : `${partiallyUnknown ? '≥' : ''}${formatUsd(cost.perMonth)}`}
+            </span>
             <span className="text-[0.64rem] text-muted-foreground">/ Kind · Monat</span>
           </div>
           <p className="font-mono text-[0.6rem] text-muted-foreground">
-            {formatUsd(cost.perTurn)} / Turn × {turns} Turns / Monat
+            {allUnknown
+              ? 'Preise für diese Modelle nicht im Katalog'
+              : `${partiallyUnknown ? '≥ ' : ''}${formatUsd(cost.perTurn)} / Turn × ${turns} Turns / Monat${
+                  partiallyUnknown ? ' · Preise für einzelne Stages fehlen' : ''
+                }`}
           </p>
 
           {billable.length > 0 && (
             <div className="mt-2 flex flex-col gap-0.5 border-t border-border pt-1.5">
               {billable.map((s, i) => {
                 const price = s.model ? priceOf(s.model) : undefined
-                // Preis unbekannt (z. B. Melious ohne Katalog-Preise, in/out = -1) → nie verrechnen, „?" anzeigen
-                const priceUnknown = !price || price.in < 0 || price.out < 0
+                const priceUnknown = isPriceUnknown(price)
                 const c = s.tokens && price && !priceUnknown ? (s.tokens.in / 1e6) * price.in + (s.tokens.out / 1e6) * price.out : 0
                 return (
                   <div key={`${s.key}-${i}`} className="flex items-baseline justify-between gap-2 font-mono text-[0.6rem]">
