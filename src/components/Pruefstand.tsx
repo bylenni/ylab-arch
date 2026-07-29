@@ -18,6 +18,7 @@ interface Ergebnis extends Fall {
   ist: Route | null
   wertung: Wertung
   grund?: string
+  warnings?: string[]
 }
 
 const KONKURRENZ = 4
@@ -45,6 +46,8 @@ export function Pruefstand({ nodes }: { nodes: ArchNode[] }) {
   const klassen = useMemo(() => [...new Set((faelle ?? []).map((f) => f.klasse))], [faelle])
   const fertige = [...ergebnisse.values()]
   const metriken = aggregiereMetriken(fertige)
+  // Distinct Warnungstexte über alle gelaufenen Fälle — einzelne Warnzeilen pro Fall wären Lärm.
+  const warnHinweise = [...new Set(fertige.flatMap((e) => e.warnings ?? []))]
 
   /** Batch mit fester Parallelität — jeder Fall 1 Retry, danach fail-closed 'fehler'. */
   const starte = async (nur?: string) => {
@@ -75,7 +78,7 @@ export function Pruefstand({ nodes }: { nodes: ArchNode[] }) {
           const data = await res.json()
           if (!res.ok || data.ok === false) throw new Error(data.error ?? `HTTP ${res.status}`)
           const ist = deriveIstRoute(data)
-          return { ...fall, ist, wertung: bewerteFall(fall.erwartet, ist) }
+          return { ...fall, ist, wertung: bewerteFall(fall.erwartet, ist), warnings: data.warnings }
         } catch (err) {
           if (versuch === 2) return { ...fall, ist: null, wertung: 'fehler', grund: String(err) }
           await new Promise((r) => setTimeout(r, 2000))
@@ -132,6 +135,15 @@ export function Pruefstand({ nodes }: { nodes: ArchNode[] }) {
             {Object.entries(metriken.proAgeBand)
               .map(([ageBand, m]) => `${ageBand}: ${m.bestanden} ✓ · ${m.fn} FN · ${m.fp} FP · ${m.abweichung} ~ · ${m.fehler} E`)
               .join(' | ')}
+          </div>
+        )}
+        {warnHinweise.length > 0 && (
+          <div className="w-full text-[0.66rem] text-status-warn">
+            {warnHinweise.map((warning) => (
+              <p key={warning} className="my-0.5">
+                ⚠ {warning}
+              </p>
+            ))}
           </div>
         )}
       </div>

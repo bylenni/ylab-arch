@@ -46,6 +46,14 @@ describe('shortModelName', () => {
     expect(shortModelName('mistralai/mistral-small')).toBe('mistral-small')
   })
 
+  it('lässt eine slash-freie OpenRouter-artige ID unverändert', () => {
+    expect(shortModelName('gpt-4o-mini')).toBe('gpt-4o-mini')
+  })
+
+  it('lässt eine slash-freie melious:-ID inkl. Prefix unverändert (Gestalt aller realen Melious-IDs)', () => {
+    expect(shortModelName('melious:mistral-small-3.2-24b-instruct')).toBe('melious:mistral-small-3.2-24b-instruct')
+  })
+
   it('liefert undefined für fehlende IDs, damit Aufrufer ihren eigenen Fallback zeigen können', () => {
     expect(shortModelName(undefined)).toBeUndefined()
     expect(shortModelName(null)).toBeUndefined()

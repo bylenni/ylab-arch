@@ -25,6 +25,7 @@ interface RunResult {
   blocked?: boolean
   totalMs?: number
   stages?: RunStageResult[]
+  warnings?: string[]
 }
 interface JudgeScore {
   label: string
@@ -439,6 +440,15 @@ export function Arena({ scenarios, onScenariosChange, currentNodes, onLoadToCanv
                                 ))}
                               </div>
                               <p className="mt-1 text-muted-foreground">{jScore.begruendung}</p>
+                            </div>
+                          )}
+                          {r.warnings && r.warnings.length > 0 && (
+                            <div className="flex flex-col gap-0.5">
+                              {r.warnings.map((warning) => (
+                                <p key={warning} className="text-[0.68rem] text-status-warn">
+                                  ⚠ {warning}
+                                </p>
+                              ))}
                             </div>
                           )}
                         </>
