@@ -128,7 +128,7 @@ export function costOfRun(
   for (const stage of stages) {
     if (!stage.model || !stage.tokens) continue
     const price = priceOf(stage.model)
-    if (!price) continue
+    if (!price || price.in < 0 || price.out < 0) continue
     perTurn += (stage.tokens.in / 1e6) * price.in + (stage.tokens.out / 1e6) * price.out
   }
   return { perTurn, perMonth: perTurn * turns }

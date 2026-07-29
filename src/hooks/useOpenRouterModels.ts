@@ -43,6 +43,7 @@ export function useOpenRouterModels(): OpenRouterModel[] | null {
 }
 
 export const formatPrice = (value: number): string => {
+  if (value < 0) return '?' // Preis unbekannt (z. B. Melious ohne Katalog-Preise)
   if (value === 0) return '0'
   if (value < 0.1) return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
   return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')

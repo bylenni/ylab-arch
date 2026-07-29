@@ -13,12 +13,21 @@ function ModelSelect({ id, value, onChange }: { id: string; value: string; onCha
     if (!models) return []
     const byProvider = new Map<string, typeof models>()
     for (const model of models) {
-      const provider = model.id.includes('/') ? model.id.split('/')[0] : 'sonstige'
+      const provider = model.id.startsWith('melious:')
+        ? 'melious · EU'
+        : model.id.includes('/')
+          ? model.id.split('/')[0]
+          : 'sonstige'
       const list = byProvider.get(provider) ?? []
       list.push(model)
       byProvider.set(provider, list)
     }
-    return [...byProvider.entries()].sort(([a], [b]) => a.localeCompare(b))
+    return [...byProvider.entries()].sort(([a], [b]) => {
+      // EU-Gruppe zuoberst, Rest alphabetisch
+      if (a === 'melious · EU') return -1
+      if (b === 'melious · EU') return 1
+      return a.localeCompare(b)
+    })
   }, [models])
 
   if (models === null) {
@@ -37,7 +46,11 @@ function ModelSelect({ id, value, onChange }: { id: string; value: string; onCha
         <optgroup key={provider} label={provider}>
           {list.map((model) => (
             <option key={model.id} value={model.id} title={`${model.name} · Kontext ${model.ctx.toLocaleString('de-DE')}`}>
-              {model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id} · ${formatPrice(model.in)}/${formatPrice(model.out)}
+              {model.id.startsWith('melious:')
+                ? model.id.slice('melious:'.length)
+                : model.id.includes('/')
+                  ? model.id.split('/').slice(1).join('/')
+                  : model.id} · ${formatPrice(model.in)}/${formatPrice(model.out)}
             </option>
           ))}
         </optgroup>

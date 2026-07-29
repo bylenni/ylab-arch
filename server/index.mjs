@@ -516,6 +516,39 @@ async function loadModels() {
       out: Number(m.pricing?.completion ?? 0) * 1e6,
     }))
     .sort((a, b) => a.id.localeCompare(b.id))
+
+  // Melious-Katalog (EU) dazu mergen — Probe auf OpenAI-konventionelles /v1/models;
+  // scheitert die Probe (Endpoint nicht dokumentiert), fällt eine kuratierte Liste ein.
+  const meliousKey = process.env.MELIOUS_API_KEY
+  if (meliousKey) {
+    let meliousModels = []
+    try {
+      const mres = await fetch('https://api.melious.ai/v1/models', {
+        headers: { Authorization: `Bearer ${meliousKey}` },
+        signal: AbortSignal.timeout(4000),
+      })
+      if (mres.ok) {
+        const mjson = await mres.json()
+        meliousModels = (mjson.data ?? []).map((m) => ({
+          id: `melious:${m.id}`,
+          name: `${m.name ?? m.id}`,
+          ctx: m.context_length ?? 0,
+          // Preis nur übernehmen, wenn der Katalog ihn liefert — sonst -1 = „unbekannt"
+          in: m.pricing?.prompt != null ? Number(m.pricing.prompt) * 1e6 : -1,
+          out: m.pricing?.completion != null ? Number(m.pricing.completion) * 1e6 : -1,
+        }))
+      }
+    } catch {
+      // Probe gescheitert → kuratierter Fallback (IDs beim ersten Live-Lauf verifiziert)
+    }
+    if (meliousModels.length === 0) {
+      meliousModels = ['mistral-small-3.2-24b-instruct', 'qwen3-30b-a3b-instruct', 'deepseek-v3.2'].map((id) => ({
+        id: `melious:${id}`, name: id, ctx: 0, in: -1, out: -1,
+      }))
+    }
+    data.push(...meliousModels.sort((a, b) => a.id.localeCompare(b.id)))
+  }
+
   modelsCache = { at: Date.now(), data }
   return data
 }
@@ -548,6 +581,7 @@ const server = http.createServer(async (req, res) => {
       JSON.stringify({
         ok: true,
         hasKey: Boolean(providerConfig('openrouter').key),
+        hasMeliousKey: Boolean(process.env.MELIOUS_API_KEY),
         promptVersion: PROMPT_VERSION,
         stt: sttReady ? 'whisper.cpp large-v3-turbo (lokal)' : null,
         tts: TTS_URL ? 'extern (TTS_URL)' : piperAvailable() ? `Piper ${PIPER_VOICE} (lokal)` : 'macOS say „Anna" (Platzhalter)',
