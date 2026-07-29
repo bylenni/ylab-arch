@@ -85,14 +85,16 @@ export function CostOverlay({ stages, cached, priceOf }: Props) {
             <div className="mt-2 flex flex-col gap-0.5 border-t border-border pt-1.5">
               {billable.map((s, i) => {
                 const price = s.model ? priceOf(s.model) : undefined
-                const c = s.tokens && price ? (s.tokens.in / 1e6) * price.in + (s.tokens.out / 1e6) * price.out : 0
+                // Preis unbekannt (z. B. Melious ohne Katalog-Preise, in/out = -1) → nie verrechnen, „?" anzeigen
+                const priceUnknown = !price || price.in < 0 || price.out < 0
+                const c = s.tokens && price && !priceUnknown ? (s.tokens.in / 1e6) * price.in + (s.tokens.out / 1e6) * price.out : 0
                 return (
                   <div key={`${s.key}-${i}`} className="flex items-baseline justify-between gap-2 font-mono text-[0.6rem]">
                     <span className="truncate text-muted-foreground">
                       {KEY_LABEL[s.key] ?? s.label}
                       <span className="ml-1 opacity-60">{s.model?.split('/').pop()}</span>
                     </span>
-                    <span className="shrink-0 tabular-nums">{formatUsd(c * turns)}</span>
+                    <span className="shrink-0 tabular-nums">{priceUnknown ? '?' : formatUsd(c * turns)}</span>
                   </div>
                 )
               })}
