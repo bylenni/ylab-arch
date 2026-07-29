@@ -12,6 +12,12 @@ npm run dev            # startet Webapp (5173) + Live-API (8787) parallel
 npm run stt            # optional, eigenes Terminal: lokales Whisper (Port 8788)
 ```
 
+**Optional: EU-Provider Melious** ([melious.ai](https://melious.ai)) — für eine Pipeline, die
+die EU nie verlässt. `MELIOUS_API_KEY` in die `.env` eintragen; passende Modelle erscheinen dann
+im Modell-Dropdown als eigene Gruppe „melious · EU" (IDs mit `melious:`-Prefix). Ganz ohne
+OpenRouter-Key nutzbar — es reicht, wenn irgendein Provider-Key gesetzt ist. Ob der Key erkannt
+wurde, zeigt `curl localhost:8787/api/health` (Feld `hasMeliousKey`).
+
 ## Setup nach dem Klonen (einmalig)
 
 Modell-Binaries und das TTS-venv sind aus Größengründen nicht im Repo:

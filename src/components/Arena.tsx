@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { ArchNode } from '../types'
 import type { Scenario } from '../scenarios'
-import { captureScenario, buildRunPayload, costOfRun, formatUsd } from '../scenarios'
+import { captureScenario, buildRunPayload, costOfRun, formatUsd, shortModelName } from '../scenarios'
 import { useOpenRouterModels } from '../hooks/useOpenRouterModels'
 import { PttRecorder } from '../lib/recorder'
 import { Button, Input, Label, Textarea } from './ui'
@@ -270,7 +270,7 @@ export function Arena({ scenarios, onScenariosChange, currentNodes, onLoadToCanv
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-semibold">{s.name}</div>
                       <div className="truncate font-mono text-[0.62rem] text-muted-foreground">
-                        {s.models.main?.split('/').pop() ?? '—'}
+                        {shortModelName(s.models.main) ?? '—'}
                       </div>
                     </div>
                   </div>

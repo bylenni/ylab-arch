@@ -1,6 +1,6 @@
 // Tests für costOfRun — Preise mit unbekanntem Marker (-1) dürfen nie verrechnet werden.
 import { describe, it, expect } from 'vitest'
-import { costOfRun } from './scenarios'
+import { costOfRun, shortModelName } from './scenarios'
 import type { RunStage } from './scenarios'
 
 const PRICES: Record<string, { in: number; out: number }> = {
@@ -34,5 +34,20 @@ describe('costOfRun', () => {
     const cost = costOfRun(stages, priceOf, 100)
     expect(cost.perTurn).toBe(0)
     expect(cost.perMonth).toBe(0)
+  })
+})
+
+describe('shortModelName', () => {
+  it('kürzt eine melious:-ID auf den letzten Pfadteil, Prefix bleibt erhalten', () => {
+    expect(shortModelName('melious:mistralai/mistral-small')).toBe('melious:mistral-small')
+  })
+
+  it('kürzt eine OpenRouter-ID wie bisher auf den letzten Pfadteil', () => {
+    expect(shortModelName('mistralai/mistral-small')).toBe('mistral-small')
+  })
+
+  it('liefert undefined für fehlende IDs, damit Aufrufer ihren eigenen Fallback zeigen können', () => {
+    expect(shortModelName(undefined)).toBeUndefined()
+    expect(shortModelName(null)).toBeUndefined()
   })
 })

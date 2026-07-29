@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { costOfRun, formatUsd, turnsPerMonth, DEFAULT_HOURS_PER_WEEK } from '../scenarios'
+import { costOfRun, formatUsd, turnsPerMonth, DEFAULT_HOURS_PER_WEEK, shortModelName } from '../scenarios'
 import type { RunStage } from '../scenarios'
 
 export interface CostStage extends RunStage {
@@ -109,7 +109,7 @@ export function CostOverlay({ stages, cached, priceOf }: Props) {
                   <div key={`${s.key}-${i}`} className="flex items-baseline justify-between gap-2 font-mono text-[0.6rem]">
                     <span className="truncate text-muted-foreground">
                       {KEY_LABEL[s.key] ?? s.label}
-                      <span className="ml-1 opacity-60">{s.model?.split('/').pop()}</span>
+                      <span className="ml-1 opacity-60">{shortModelName(s.model)}</span>
                     </span>
                     <span className="shrink-0 tabular-nums">{priceUnknown ? '?' : formatUsd(c * turns)}</span>
                   </div>

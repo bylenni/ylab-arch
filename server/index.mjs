@@ -237,6 +237,26 @@ async function runPipeline({ utterance, ageBand = '4-5', models = {}, blockPatte
   const mainModel = models.main || 'meta-llama/llama-3.3-70b-instruct'
   const safetyModel = models.safety || 'openai/gpt-4o-mini'
 
+  // Datenresidenz: Nutzt die Pipeline sonst bewusst EU-Modelle (melious:), aber für eine
+  // Stufe wurde keines übergeben, greift hier still ein OpenRouter-Default — das verlässt
+  // unbemerkt die EU. Explizit warnen, statt die EU-Pipeline heimlich zu verlassen.
+  const explicitMeliousUsed = [models.triage, models.main, models.safety].some(
+    (m) => typeof m === 'string' && m.startsWith('melious:'),
+  )
+  if (explicitMeliousUsed) {
+    for (const [stage, provided, resolved] of [
+      ['Triage', models.triage, triageModel],
+      ['Haupt-LLM', models.main, mainModel],
+      ['Safety', models.safety, safetyModel],
+    ]) {
+      if (!provided) {
+        warnings.push(
+          `Achtung: Für ${stage} wurde der Server-Default ${resolved} (OpenRouter, nicht EU) verwendet, obwohl die Pipeline sonst EU-Modelle nutzt.`,
+        )
+      }
+    }
+  }
+
   // Gesprächshistorie: letzte 8 Turns, bereinigt
   const dialog = (Array.isArray(history) ? history : [])
     .filter((m) => m && typeof m.text === 'string' && m.text.trim())
@@ -501,21 +521,28 @@ const readBody = (req) =>
 let modelsCache = { at: 0, data: null }
 async function loadModels() {
   if (modelsCache.data && Date.now() - modelsCache.at < 60 * 60 * 1000) return modelsCache.data
-  const res = await fetch('https://openrouter.ai/api/v1/models')
-  if (!res.ok) throw new Error(`OpenRouter /models: HTTP ${res.status}`)
-  const json = await res.json()
-  const data = (json.data ?? [])
-    .filter((m) => (m.architecture?.output_modalities ?? ['text']).includes('text'))
-    // Meta-Router (openrouter/auto etc.) haben Preis -1 — raus damit
-    .filter((m) => Number(m.pricing?.prompt ?? 0) >= 0 && Number(m.pricing?.completion ?? 0) >= 0)
-    .map((m) => ({
-      id: m.id,
-      name: m.name ?? m.id,
-      ctx: m.context_length ?? 0,
-      in: Number(m.pricing?.prompt ?? 0) * 1e6,
-      out: Number(m.pricing?.completion ?? 0) * 1e6,
-    }))
-    .sort((a, b) => a.id.localeCompare(b.id))
+  // OpenRouter-Abruf darf den Melious-Katalog nicht mitreißen: schlägt er fehl (down, Rate-Limit),
+  // trägt der EU-Katalog allein weiter — sonst hätte ein reiner EU-Betrieb gar keinen Modell-Katalog.
+  let data = []
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models')
+    if (!res.ok) throw new Error(`OpenRouter /models: HTTP ${res.status}`)
+    const json = await res.json()
+    data = (json.data ?? [])
+      .filter((m) => (m.architecture?.output_modalities ?? ['text']).includes('text'))
+      // Meta-Router (openrouter/auto etc.) haben Preis -1 — raus damit
+      .filter((m) => Number(m.pricing?.prompt ?? 0) >= 0 && Number(m.pricing?.completion ?? 0) >= 0)
+      .map((m) => ({
+        id: m.id,
+        name: m.name ?? m.id,
+        ctx: m.context_length ?? 0,
+        in: Number(m.pricing?.prompt ?? 0) * 1e6,
+        out: Number(m.pricing?.completion ?? 0) * 1e6,
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id))
+  } catch {
+    data = [] // OpenRouter nicht erreichbar — Melious-Merge unten läuft trotzdem
+  }
 
   // Melious-Katalog (EU) dazu mergen — Probe auf OpenAI-konventionelles /v1/models;
   // scheitert die Probe (Endpoint nicht dokumentiert), fällt eine kuratierte Liste ein.
@@ -637,11 +664,6 @@ const server = http.createServer(async (req, res) => {
   // Auto-Judge: bewertet anonymisierte Antworten nach Rubrik, kürt einen Gewinner
   if (req.method === 'POST' && req.url === '/api/judge') {
     try {
-      if (!providerConfig('openrouter').key) {
-        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
-          JSON.stringify({ ok: false, error: 'Kein OPENROUTER_API_KEY gesetzt.' }),
-        )
-      }
       const body = JSON.parse((await readBody(req)) || '{}')
       const answers = Array.isArray(body.answers) ? body.answers : []
       if (answers.length < 2) {
@@ -650,6 +672,13 @@ const server = http.createServer(async (req, res) => {
         )
       }
       const model = body.model || 'anthropic/claude-sonnet-4.6'
+      // Key-Check erst hier, weil das Judge-Modell (und damit sein Provider) erst aus dem Body bekannt ist.
+      const { providerId } = resolveProvider(model)
+      if (!providerConfig(providerId).key) {
+        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
+          JSON.stringify({ ok: false, error: `Kein API-Key für Provider "${providerId}" gesetzt (${providerId === 'melious' ? 'MELIOUS_API_KEY' : 'OPENROUTER_API_KEY'} in .env).` }),
+        )
+      }
       const rubric = typeof body.rubric === 'string' && body.rubric.trim() ? body.rubric : DEFAULT_JUDGE_RUBRIC
       const block = answers
         .map((a) => `Antwort ${a.label}:\n"${String(a.text ?? '').slice(0, 800)}"`)
@@ -746,9 +775,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/run') {
     try {
-      if (!providerConfig('openrouter').key) {
+      // Nicht auf OpenRouter fixieren: eine reine EU-Pipeline (nur melious:-Modelle) braucht
+      // nur MELIOUS_API_KEY. Der per-Provider-Check pro Modell passiert ohnehin in callModel.
+      if (!providerConfig('openrouter').key && !providerConfig('melious').key) {
         return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
-          JSON.stringify({ ok: false, error: 'Kein OPENROUTER_API_KEY gesetzt. Lege eine .env mit OPENROUTER_API_KEY=sk-or-… ins Projektverzeichnis und starte `npm run dev` neu.' }),
+          JSON.stringify({ ok: false, error: 'Kein API-Key gesetzt. Lege eine .env mit OPENROUTER_API_KEY=sk-or-… und/oder MELIOUS_API_KEY=… ins Projektverzeichnis und starte `npm run dev` neu.' }),
         )
       }
       const body = JSON.parse((await readBody(req)) || '{}')

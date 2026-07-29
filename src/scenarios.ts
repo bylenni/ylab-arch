@@ -99,7 +99,23 @@ export function buildRunPayload(scenario: Scenario, utterance: string, ageBand: 
     systemPrompt: scenario.systemPrompt,
     models: scenario.models,
     blockPatterns: scenario.config.blockPatterns ?? '',
+    // Arena misst Latenz/Kosten für den Provider-Vergleich — darf nie einen Cache-Hit (ms:0) messen.
+    noCache: true,
   }
+}
+
+/* ---------------- Anzeige ---------------- */
+
+/** Kürzt eine Modell-ID fürs UI. `melious:`-Prefix bleibt erhalten — sonst wären die
+ *  OpenRouter- und die Melious-Variante desselben Modells im A/B-Vergleich optisch identisch.
+ *  Der Rest wird wie gehabt auf den Teil nach dem letzten „/" gekürzt.
+ *  z. B. `melious:mistralai/mistral-small` → `melious:mistral-small`, `mistralai/mistral-small` → `mistral-small`. */
+export function shortModelName(id: string | undefined | null): string | undefined {
+  if (!id) return undefined
+  const isMelious = id.startsWith('melious:')
+  const rest = isMelious ? id.slice('melious:'.length) : id
+  const short = rest.split('/').pop() || rest
+  return isMelious ? `melious:${short}` : short
 }
 
 /* ---------------- Kosten ---------------- */
