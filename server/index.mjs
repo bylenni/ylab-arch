@@ -28,6 +28,7 @@ import {
   outcomeDirective,
 } from './teachingPlanner.mjs'
 import { decideRoute, normalizeUtterance } from './router.mjs'
+import { resolveProvider, providerConfig } from './providers.mjs'
 
 const PORT = process.env.API_PORT ?? 8787
 const execFileAsync = promisify(execFile)
@@ -99,9 +100,6 @@ const TRIAGE_CACHE_MAX = 500
 const answerCache = new Map()
 const ANSWER_CACHE_MAX = 200
 
-const API_KEY = process.env.OPENROUTER_API_KEY
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-
 /* ------------------------------------------------------------------ */
 /* Prompts — versioniert im Repo; das hier ist euer eigentliches Produkt */
 /* ------------------------------------------------------------------ */
@@ -167,24 +165,28 @@ const SCRIPTED_FALLBACK =
 
 async function callModel({ model, system, user, history = [], maxTokens = 400 }) {
   const started = performance.now()
-  const res = await fetch(OPENROUTER_URL, {
+  const { providerId, modelId } = resolveProvider(model)
+  const { url, key, isOpenRouter } = providerConfig(providerId)
+  if (!key) {
+    throw new Error(`Kein API-Key für Provider "${providerId}" gesetzt (${providerId === 'melious' ? 'MELIOUS_API_KEY' : 'OPENROUTER_API_KEY'} in .env).`)
+  }
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:5173',
-      'X-Title': 'Architektur-Studio',
+      ...(isOpenRouter ? { 'HTTP-Referer': 'http://localhost:5173', 'X-Title': 'Architektur-Studio' } : {}),
     },
     body: JSON.stringify({
-      model,
+      model: modelId,
       max_tokens: maxTokens,
       messages: [
         { role: 'system', content: system },
         ...history.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.text ?? '') })),
         { role: 'user', content: user },
       ],
-      // Anbieter ausschließen, die Prompts zum Training verwenden würden
-      provider: { data_collection: 'deny' },
+      // Nur OpenRouter kennt das Anbieter-Feld; Melious ist ohnehin EU-only ohne Training
+      ...(isOpenRouter ? { provider: { data_collection: 'deny' } } : {}),
     }),
   })
   if (!res.ok) {
@@ -545,7 +547,7 @@ const server = http.createServer(async (req, res) => {
     return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
       JSON.stringify({
         ok: true,
-        hasKey: Boolean(API_KEY),
+        hasKey: Boolean(providerConfig('openrouter').key),
         promptVersion: PROMPT_VERSION,
         stt: sttReady ? 'whisper.cpp large-v3-turbo (lokal)' : null,
         tts: TTS_URL ? 'extern (TTS_URL)' : piperAvailable() ? `Piper ${PIPER_VOICE} (lokal)` : 'macOS say „Anna" (Platzhalter)',
@@ -601,7 +603,7 @@ const server = http.createServer(async (req, res) => {
   // Auto-Judge: bewertet anonymisierte Antworten nach Rubrik, kürt einen Gewinner
   if (req.method === 'POST' && req.url === '/api/judge') {
     try {
-      if (!API_KEY) {
+      if (!providerConfig('openrouter').key) {
         return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
           JSON.stringify({ ok: false, error: 'Kein OPENROUTER_API_KEY gesetzt.' }),
         )
@@ -710,7 +712,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/run') {
     try {
-      if (!API_KEY) {
+      if (!providerConfig('openrouter').key) {
         return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
           JSON.stringify({ ok: false, error: 'Kein OPENROUTER_API_KEY gesetzt. Lege eine .env mit OPENROUTER_API_KEY=sk-or-… ins Projektverzeichnis und starte `npm run dev` neu.' }),
         )
@@ -732,5 +734,5 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`[api] Live-Pipeline auf http://localhost:${PORT} · Key: ${API_KEY ? 'vorhanden' : 'FEHLT (.env)'}`)
+  console.log(`[api] Live-Pipeline auf http://localhost:${PORT} · Key: ${providerConfig('openrouter').key ? 'vorhanden' : 'FEHLT (.env)'}`)
 })
