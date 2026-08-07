@@ -133,6 +133,11 @@ describe('runS2S — Safety-Gate', () => {
 
     await runS2S(opt({ blockPatterns: 'böse. hexe' }), sende, synthesizeFake)
 
+    // Der erste Satz wird vom Guard freigegeben und als answer-Audio gesendet,
+    // bevor die Gesamtantwort-Prüfung das Pattern über die Satzgrenze erkennt.
+    // Nach dem abort darf kein weiterer answer-Chunk folgen.
+    const answerAudios = ereignisse.filter((e) => e.type === 'audio' && e.kind === 'answer')
+    expect(answerAudios).toHaveLength(1)
     expect(ereignisse.some((e) => e.type === 'abort' && /Gesamtantwort/.test(e.grund ?? ''))).toBe(true)
     expect(ereignisse.some((e) => e.type === 'audio' && e.kind === 'pivot')).toBe(true)
     expect(ereignisse[ereignisse.length - 1].type).toBe('done')

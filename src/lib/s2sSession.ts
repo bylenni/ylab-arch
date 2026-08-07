@@ -163,6 +163,10 @@ export class S2SSession {
       const aufnahmeMs = (this.bloeckeSamples / rate) * 1000
       if (zustand === 'ende' || aufnahmeMs >= MAX_AUFNAHME_MS) {
         this.opt.onVadZustand?.('fertig')
+        // VAD zurücksetzen: wird z.B. bei Timeout/Server-Fehler sofort nötig,
+        // bevor die async turnSenden()-Antwort kommt — andernfalls bleibt VAD
+        // auf "spricht", und der nächste Stille-Block löst einen Phantom-Turn aus.
+        this.vad.reset()
         void this.turnSenden()
       }
     }
