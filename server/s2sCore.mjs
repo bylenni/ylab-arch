@@ -4,8 +4,8 @@
  * Prüfung") ist damit als Zustandsautomat testbar statt nur behauptet.
  */
 
-/** Abkürzungen, nach denen ein Punkt KEIN Satzende ist. */
-const ABKUERZUNGEN = ['z', 'b', 'u', 'a', 'd', 'h', 'ca', 'bzw', 'ggf', 'usw', 'etc', 'dr', 'nr', 'ab', 'evtl']
+/** Bekannte Abkürzungsformen, jeweils MIT abschließendem Punkt. */
+const ABKUERZUNGEN = ['z. b.', 'z.b.', 'u. a.', 'u.a.', 'd. h.', 'd.h.', 'ca.', 'bzw.', 'ggf.', 'usw.', 'etc.', 'dr.', 'nr.', 'evtl.']
 
 /** Ist der Punkt an Position i ein echtes Satzende? */
 function istSatzende(text, i) {
@@ -14,13 +14,17 @@ function istSatzende(text, i) {
   if (zeichen !== '.') return false
   // Dezimalzahl: Ziffer davor UND danach
   if (/\d/.test(text[i - 1] ?? '') && /\d/.test(text[i + 1] ?? '')) return false
-  // Abkürzung: letztes Wort vor dem Punkt steht in der Liste
-  const davor = text.slice(0, i).toLowerCase()
-  const letztesWort = davor.slice(davor.lastIndexOf(' ') + 1)
-  if (ABKUERZUNGEN.includes(letztesWort)) return false
-  // Mehrteilige Abkürzung („z. B.") — auch das vorletzte Wortpaar prüfen
-  const zweiWorte = davor.split(' ').slice(-2).join(' ')
-  if (ABKUERZUNGEN.includes(zweiWorte)) return false
+  // Regel A: erster Punkt einer Mehrwort-Abkürzung — danach folgt ein Einzelbuchstabe + Punkt
+  const danach = text.slice(i + 1)
+  if (/^\s*[A-Za-zÄÖÜäöüß]\./.test(danach)) return false
+  // Regel B: bekannte Abkürzung endet genau hier
+  const bisHier = text.slice(0, i + 1).toLowerCase()
+  for (const form of ABKUERZUNGEN) {
+    if (bisHier.endsWith(form)) {
+      const vorZeichen = bisHier[bisHier.length - form.length - 1]
+      if (vorZeichen === undefined || /\s/.test(vorZeichen)) return false
+    }
+  }
   return true
 }
 
@@ -41,7 +45,7 @@ export function createChunker() {
         const danach = puffer[i + 1]
         if (danach !== undefined && !/\s/.test(danach)) continue
         const satz = puffer.slice(start, i + 1).trim()
-        if (satz) saetze.push(satz)
+        if (satz && /[\p{L}\p{N}]/u.test(satz)) saetze.push(satz)
         start = i + 1
       }
       puffer = puffer.slice(start)

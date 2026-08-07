@@ -38,6 +38,31 @@ describe('createChunker — Sätze aus dem Token-Strom', () => {
     c.feed('Alles fertig.')
     expect(c.flush()).toBe(null)
   })
+
+  it('erkennt Abkürzungen direkt nach einem Zeilenumbruch', () => {
+    const c = createChunker()
+    expect(c.feed('Erster Satz.\nDr. Zweiter Satz folgt.')).toEqual([
+      'Erster Satz.', 'Dr. Zweiter Satz folgt.',
+    ])
+  })
+
+  it('behandelt Einzelbuchstaben NICHT als Abkürzung', () => {
+    const c = createChunker()
+    expect(c.feed('Der Buchstabe ist A. Und jetzt B.')).toEqual([
+      'Der Buchstabe ist A.', 'Und jetzt B.',
+    ])
+  })
+
+  it('trennt NICHT bei Abkürzungen ohne Leerzeichen', () => {
+    const c = createChunker()
+    expect(c.feed('Nimm z.B. drei Äpfel und zähl sie.')).toEqual(['Nimm z.B. drei Äpfel und zähl sie.'])
+  })
+
+  it('verwirft ein isoliertes Satzzeichen an der Chunk-Grenze', () => {
+    const c = createChunker()
+    expect(c.feed('Wirklich?')).toEqual(['Wirklich?'])
+    expect(c.feed('! Ja klar.')).toEqual(['Ja klar.'])
+  })
 })
 
 describe('createGate — die Sicherheits-Invariante', () => {
