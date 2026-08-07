@@ -64,17 +64,38 @@ describe('createChunker — Sätze aus dem Token-Strom', () => {
     expect(c.feed('! Ja klar.')).toEqual(['Ja klar.'])
   })
 
-  it('verwirft NUR reine Satzzeichen-Cluster, keine Symbole wie Emoji', () => {
+  it('behält Emoji-Chunks, da Emoji vorlesbaren Inhalt tragen', () => {
     const c = createChunker()
     expect(c.feed('Text eins. 😀. Text zwei.')).toEqual([
       'Text eins.', '😀.', 'Text zwei.',
     ])
   })
 
-  it('verwirft NUR reine Satzzeichen-Cluster, keine Währungs-/Mathezeichen', () => {
+  it('verwirft Chunks ohne vorlesbaren Inhalt (Symbolreste ohne Buchstabe/Ziffer/Emoji)', () => {
     const c = createChunker()
     expect(c.feed('Der Preis ist wichtig. $! Und weiter gehts.')).toEqual([
-      'Der Preis ist wichtig.', '$!', 'Und weiter gehts.',
+      'Der Preis ist wichtig.', 'Und weiter gehts.',
+    ])
+  })
+
+  it('verwirft einen Gedankenstrich-Rest ohne vorlesbaren Inhalt', () => {
+    const c = createChunker()
+    expect(c.feed('Text eins. - . Text zwei.')).toEqual([
+      'Text eins.', 'Text zwei.',
+    ])
+  })
+
+  it('verwirft einen leeren Anführungszeichen-Rest ohne vorlesbaren Inhalt', () => {
+    const c = createChunker()
+    expect(c.feed('Text eins. "". Text zwei.')).toEqual([
+      'Text eins.', 'Text zwei.',
+    ])
+  })
+
+  it('verwirft einen Sternchen-Rest ohne vorlesbaren Inhalt', () => {
+    const c = createChunker()
+    expect(c.feed('Text eins. *. Text zwei.')).toEqual([
+      'Text eins.', 'Text zwei.',
     ])
   })
 })

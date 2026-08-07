@@ -45,9 +45,9 @@ export function createChunker() {
         const danach = puffer[i + 1]
         if (danach !== undefined && !/\s/.test(danach)) continue
         const satz = puffer.slice(start, i + 1).trim()
-        // Nur einen reinen Interpunktions-Cluster-Rest verwerfen (z. B. isoliertes "!"),
-        // nicht beliebigen symbolischen Inhalt (Emoji, Währungs-/Mathezeichen etc.).
-        if (satz && !/^[.!?,;:…]+$/.test(satz)) saetze.push(satz)
+        // Verwerfen, was keinen vorlesbaren Inhalt trägt (Satzzeichen- oder Symbolreste
+        // an Stream-Grenzen) — Buchstaben, Ziffern und Emoji zählen als Inhalt.
+        if (/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(satz)) saetze.push(satz)
         start = i + 1
       }
       puffer = puffer.slice(start)
