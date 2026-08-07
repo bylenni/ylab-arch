@@ -678,9 +678,26 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && req.url === '/api/s2s') {
-    const body = JSON.parse((await readBody(req)) || '{}')
+    // JSON.parse innerhalb des try: ein kaputter Body darf den Prozess nicht beenden
+    // (unhandled exception vor dem writeHead) — alle anderen Endpunkte parsen genauso.
+    let body
+    try {
+      body = JSON.parse((await readBody(req)) || '{}')
+    } catch (err) {
+      return res.writeHead(400, { 'Content-Type': 'application/json' }).end(
+        JSON.stringify({ ok: false, error: `Ungültiger Request-Body: ${String(err.message ?? err)}` }),
+      )
+    }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' })
-    const sende = (ereignis) => res.write(`${JSON.stringify(ereignis)}\n`)
+    // Client kann die Verbindung jederzeit kappen — danach nie mehr schreiben,
+    // sonst erzeugt res.write() eine weitere unbehandelte Rejection.
+    const sende = (ereignis) => {
+      if (res.writableEnded) return
+      res.write(`${JSON.stringify(ereignis)}\n`)
+    }
+    // Außerhalb des try deklariert, damit der Lernstand auch im Fehlerfall gesichert wird.
+    const sessionId = String(body.sessionId ?? 's2s')
+    const learner = learnerStates.get(sessionId) ?? emptyLearnerState()
     try {
       // STT zuerst — der Client schickt Audio, die Kette braucht Text
       sende({ type: 'stage', key: 'stt', status: 'aktiv' })
@@ -701,14 +718,13 @@ const server = http.createServer(async (req, res) => {
         return res.end()
       }
 
-      const sessionId = String(body.sessionId ?? 's2s')
-      const learner = learnerStates.get(sessionId) ?? emptyLearnerState()
       await runS2S({ ...body, utterance, learner, openerIndex: (body.history?.length ?? 0) }, sende, synthesize)
       setLearnerState(sessionId, learner)
       return res.end()
     } catch (err) {
       sende({ type: 'abort', grund: String(err.message ?? err) })
       sende({ type: 'done', totalMs: 0, decision: 'fehler' })
+      setLearnerState(sessionId, learner) // Lernstand nicht verlieren, auch wenn die Kette mittendrin abbricht
       return res.end()
     }
   }

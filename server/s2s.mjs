@@ -41,6 +41,15 @@ export async function runS2S(opt, sende, synthesize) {
   const gate = createGate()
   let chunkIndex = 0
 
+  // `done` ist terminal: Task 4 darf sich darauf verlassen, dass danach nichts mehr
+  // kommt. Einmalig egal auf welchem Pfad (Erfolg oder Abbruch).
+  let doneGesendet = false
+  const sendeDone = (payload) => {
+    if (doneGesendet) return
+    doneGesendet = true
+    sende({ type: 'done', totalMs: Date.now() - started, ...payload })
+  }
+
   /** Spielt kuratierten (vorab genehmigten) Text aus — Opener, Skript, Pivot. */
   const sendeKuratiert = async (text, kind) => {
     const { base64 } = await synthesize(text)
@@ -48,12 +57,17 @@ export async function runS2S(opt, sende, synthesize) {
     sende({ type: 'audio', wavBase64: base64, index: -1, kind })
   }
 
-  /** Bricht ab: kein weiterer Antwort-Chunk, Pivot als letztes Wort. */
+  /** Bricht ab: kein weiterer Antwort-Chunk, Pivot als letztes Wort.
+   *  Idempotent — ein zweiter Aufruf (z. B. Pattern-Treffer UND ein parallel bereits
+   *  werfender Guard-Call) darf nicht zweimal Pivot + `done` auslösen. */
+  let abbrechenGestartet = false
   const abbrechen = async (grund) => {
+    if (abbrechenGestartet) return
+    abbrechenGestartet = true
     gate.reject(grund)
     sende({ type: 'abort', grund })
     await sendeKuratiert(SCRIPTED_PIVOT, 'pivot')
-    sende({ type: 'done', totalMs: Date.now() - started, decision: 'abgebrochen' })
+    sendeDone({ decision: 'abgebrochen' })
   }
 
   try {
@@ -89,7 +103,7 @@ export async function runS2S(opt, sende, synthesize) {
       sende({ type: 'stage', key: 'script', status: 'aktiv' })
       await sendeKuratiert(text, 'script')
       sende({ type: 'stage', key: 'script', status: 'fertig', ms: 1, detail: 'Kuratierte Antwort (vorsynthetisiert)' })
-      sende({ type: 'done', totalMs: Date.now() - started, decision })
+      sendeDone({ decision })
       return
     }
 
@@ -113,12 +127,29 @@ export async function runS2S(opt, sende, synthesize) {
     sende({ type: 'stage', key: 'main', status: 'aktiv' })
     const chunker = createChunker()
     const wartende = []        // Chunks, die auf die Vollprüfung warten
-    let praefix = ''           // bereits freigegebener Text (Kontext für den Guard)
-    let guardLaeuft = null
 
-    /** Schickt einen freigegebenen Antwort-Chunk als Text + Audio. */
+    // Reine Serialisierungskette: garantiert Feed-Reihenfolge (Index == Textposition)
+    // UND dass niemals ein Promise unbehandelt rejected — jeder Link fängt seinen
+    // eigenen Fehler ab und schickt ihn in den Abbruchpfad, statt den Prozess mit
+    // einer unhandled rejection zu beenden.
+    // WICHTIG: diese Variable NIE mit einem anderen Promise (z. B. einem Modellaufruf)
+    // überschreiben. Genau das war der Bug: ein überschriebener Kettenkopf lässt
+    // spätere Sätze an der falschen Stelle andocken (Index/Text vertauscht) UND macht
+    // das eigentliche Kettenglied zu einer verwaisten, nie awaiteten Promise.
+    let kette = null
+    const anKette = (fn) => {
+      kette = (kette ?? Promise.resolve())
+        .then(fn)
+        .catch((err) => abbrechen(String(err?.message ?? err)).catch(() => {}))
+    }
+
+    /** Schickt einen freigegebenen Antwort-Chunk als Text + Audio.
+     *  Freigabe wird NACH der TTS-Synthese erneut geprüft: ein Abbruch kann während
+     *  der (asynchronen) Synthese eintreffen — dann darf trotzdem nichts mehr raus. */
     const sendeChunk = async (satz, index) => {
+      if (!gate.mayEmit(index)) return
       const { base64 } = await synthesize(satz)
+      if (!gate.mayEmit(index)) return
       sende({ type: 'text', chunk: satz, index })
       sende({ type: 'audio', wavBase64: base64, index, kind: 'answer' })
     }
@@ -136,15 +167,16 @@ export async function runS2S(opt, sende, synthesize) {
       }
 
       if (index === 0) {
-        // Erster Satz: ein Guard-Call auf dem kumulativen Präfix inkl. Kinderfrage
+        // Erster Satz: ein Guard-Call auf dem kumulativen Präfix inkl. Kinderfrage.
+        // Eigene lokale Variable — NICHT `kette` wiederverwenden (siehe Kommentar oben).
         const guardStart = Date.now()
         sende({ type: 'stage', key: 'guard', status: 'aktiv' })
-        guardLaeuft = callModel({
+        const guardCall = callModel({
           model: safetyModel, system: SAFETY_SYSTEM,
           user: `Frage des Kindes (${ageBand} Jahre): "${utterance}"\n\nBisher geplanter Antwortanfang: "${satz}"`,
           maxTokens: 200,
         })
-        const urteil = parseJson((await guardLaeuft).text)
+        const urteil = parseJson((await guardCall).text)
         const frei = urteil?.freigabe === true
         sende({
           type: 'stage', key: 'guard', status: frei ? 'fertig' : 'fehler', ms: Date.now() - guardStart,
@@ -155,14 +187,12 @@ export async function runS2S(opt, sende, synthesize) {
           return
         }
         gate.approveFirst()
-        praefix += `${satz} `
         await sendeChunk(satz, index)
         return
       }
 
       // Ab Chunk 2: erst nach bestandener Vollprüfung
       if (gate.mayEmit(index)) {
-        praefix += `${satz} `
         await sendeChunk(satz, index)
       } else {
         wartende.push({ satz, index })
@@ -174,15 +204,15 @@ export async function runS2S(opt, sende, synthesize) {
       onDelta: (delta) => {
         for (const satz of chunker.feed(delta)) {
           // seriell abarbeiten, damit Reihenfolge und Index stimmen
-          guardLaeuft = (guardLaeuft ?? Promise.resolve()).then(() => verarbeite(satz))
+          anKette(() => verarbeite(satz))
         }
       },
     })
     const rest = chunker.flush()
-    guardLaeuft = (guardLaeuft ?? Promise.resolve()).then(() => (rest ? verarbeite(rest) : undefined))
-    await guardLaeuft
-    sende({ type: 'stage', key: 'main', status: 'fertig', ms, detail: `${tokens.out} Tokens generiert` })
+    anKette(() => (rest ? verarbeite(rest) : undefined))
+    await kette
     if (gate.status === 'abgebrochen') return
+    sende({ type: 'stage', key: 'main', status: 'fertig', ms, detail: `${tokens.out} Tokens generiert` })
 
     // 6. Vollprüfung der Gesamtantwort — gibt alle restlichen Chunks frei
     const safetyStart = Date.now()
@@ -206,7 +236,7 @@ export async function runS2S(opt, sende, synthesize) {
       if (gate.status === 'abgebrochen') break
       await sendeChunk(satz, index)
     }
-    sende({ type: 'done', totalMs: Date.now() - started, decision, promptVersion: PROMPT_VERSION })
+    sendeDone({ decision, promptVersion: PROMPT_VERSION })
   } catch (err) {
     // Jeder unerwartete Fehler (Stream abgerissen, TTS kaputt, kein Key) endet fail-closed
     await abbrechen(String(err.message ?? err)).catch(() => {})
