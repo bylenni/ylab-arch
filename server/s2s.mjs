@@ -237,6 +237,16 @@ export async function runS2S(opt, sende, synthesize) {
       await abbrechen('Vollprüfung der Gesamtantwort hat blockiert')
       return
     }
+    // Pattern-Schicht zusätzlich auf die GESAMTANTWORT: `verarbeite()` prüft nur den
+    // einzelnen Satz, ein mehrwortiges Blockmuster über eine Satzgrenze hinweg würde
+    // dort nie zuschlagen. runPipeline (der Text-Zwilling) prüft die volle Antwort —
+    // ohne diesen Schritt würde genau hier eine Sicherheitslücke zwischen den beiden
+    // Endpunkten entstehen.
+    const gesamtTreffer = muster.filter((p) => gesamt.toLowerCase().includes(p))
+    if (gesamtTreffer.length > 0) {
+      await abbrechen(`Pattern-Treffer in Gesamtantwort (${gesamtTreffer.join(', ')})`)
+      return
+    }
     gate.approveFull()
     for (const { satz, index } of wartende) {
       if (gate.status === 'abgebrochen') break

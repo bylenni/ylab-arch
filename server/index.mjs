@@ -707,6 +707,7 @@ const server = http.createServer(async (req, res) => {
       const sttStart = Date.now()
       const form = new FormData()
       form.append('file', new Blob([Buffer.from(String(body.audio ?? ''), 'base64')], { type: 'audio/wav' }), 'audio.wav')
+      form.append('language', 'de')
       form.append('response_format', 'json')
       const sttRes = await fetch(`${STT_URL}/inference`, { method: 'POST', body: form })
       if (!sttRes.ok) throw new Error(`STT HTTP ${sttRes.status} — läuft \`npm run stt\`?`)
