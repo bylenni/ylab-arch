@@ -75,6 +75,13 @@ export class S2SSession {
    *  damit ein Hintergrundgeräusch während "denkt" keinen zweiten Turn lostritt. */
   private turnAktiv = false
   private queue: string[] = []
+  /** Laufende Nummer pro Turn — zweite Verteidigungslinie neben dem AbortController:
+   *  Ereignisse, deren Token nicht mehr aktuell ist, werden ignoriert (Turn verworfen). */
+  private turnToken = 0
+  private abortController: AbortController | null = null
+  /** Aktuell spielende Quelle, damit stop() sie explizit stoppen kann (statt auf
+   *  'onended' nach ctx.close() zu hoffen, das dort nicht zuverlässig feuert). */
+  private spielQuelle: AudioBufferSourceNode | null = null
   private opt: SessionOptionen
 
   constructor(opt: SessionOptionen) {
@@ -121,6 +128,17 @@ export class S2SSession {
     this.queue = []
     this.spieltGerade = false
     this.turnAktiv = false
+    // Token invalidieren, BEVOR der alte fetch abgebrochen wird — so werden auch
+    // Ereignisse, die trotz Abbruch noch aus dem alten Stream nachtropfen, verworfen.
+    this.turnToken += 1
+    this.abortController?.abort()
+    this.abortController = null
+    try {
+      this.spielQuelle?.stop()
+    } catch {
+      // schon beendet — kein Problem
+    }
+    this.spielQuelle = null
     this.processor?.disconnect()
     this.stream?.getTracks().forEach((t) => t.stop())
     void this.ctx?.close()
@@ -155,6 +173,12 @@ export class S2SSession {
       down[i] = bis > von ? summe / (bis - von) : 0
     }
 
+    // Eigener Turn-Token + eigener AbortController: stop() (oder ein neuer Turn) kann
+    // diesen Request gezielt beenden, ohne eine andere/neuere Session zu berühren.
+    this.turnToken += 1
+    const meinToken = this.turnToken
+    const controller = new AbortController()
+    this.abortController = controller
     this.turnAktiv = true
     this.opt.onZustand('denkt')
     try {
@@ -162,7 +186,9 @@ export class S2SSession {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...this.opt.payload(), audio: wavAusFloat(down, ziel) }),
+        signal: controller.signal,
       })
+      if (meinToken !== this.turnToken) return // inzwischen verworfen (stop()/neuer Turn)
       if (!res.body) {
         this.opt.onFehler('Kein Stream vom Server erhalten.')
         return
@@ -171,6 +197,7 @@ export class S2SSession {
       const decoder = new TextDecoder()
       let puffer = ''
       for (;;) {
+        if (meinToken !== this.turnToken) break // Turn wurde verworfen — Rest des Streams ignorieren
         const { done, value } = await reader.read()
         if (done) break
         puffer += decoder.decode(value, { stream: true })
@@ -179,6 +206,9 @@ export class S2SSession {
           const zeile = puffer.slice(0, grenze).trim()
           puffer = puffer.slice(grenze + 1)
           if (!zeile) continue
+          // Zweite Verteidigungslinie: selbst wenn der Abbruch den Reader nicht sofort
+          // beendet, darf ein nachtropfendes Ereignis nicht mehr in Queue/Zustand landen.
+          if (meinToken !== this.turnToken) continue
           const ereignis: S2SEreignis = JSON.parse(zeile)
           this.opt.onEreignis(ereignis)
           if (ereignis.type === 'audio' && ereignis.wavBase64) {
@@ -189,13 +219,19 @@ export class S2SSession {
           // weil er als eigenes 'audio'-Ereignis erst NACH dieser Zeile eintrifft und neu gepusht wird.
         }
       }
-    } catch {
-      // Netzwerk-/Stream-Fehler: nicht in "denkt" hängen bleiben, sondern der UI Bescheid geben
+    } catch (err) {
+      if (meinToken !== this.turnToken) return // bewusster Abbruch durch stop() — kein Fehlerfall
+      const istAbbruch = err instanceof DOMException && err.name === 'AbortError'
       this.queue = []
-      this.opt.onFehler('Verbindung zum Server unterbrochen.')
+      if (!istAbbruch) this.opt.onFehler('Verbindung zum Server unterbrochen.')
     } finally {
-      this.turnAktiv = false
-      if (this.laeuft && !this.spieltGerade) this.opt.onZustand('hoert_zu')
+      if (this.abortController === controller) this.abortController = null
+      // Nur den eigenen (noch aktuellen) Turn abschließen — ein bereits verworfener
+      // Turn darf weder turnAktiv noch onZustand der neuen Session verändern.
+      if (meinToken === this.turnToken) {
+        this.turnAktiv = false
+        if (this.laeuft && !this.spieltGerade) this.opt.onZustand('hoert_zu')
+      }
     }
   }
 
@@ -213,7 +249,11 @@ export class S2SSession {
           const quelle = this.ctx!.createBufferSource()
           quelle.buffer = puffer
           quelle.connect(this.outAnalyser!)
-          quelle.onended = () => fertig()
+          quelle.onended = () => {
+            if (this.spielQuelle === quelle) this.spielQuelle = null
+            fertig()
+          }
+          this.spielQuelle = quelle
           quelle.start()
         })
       } catch {
