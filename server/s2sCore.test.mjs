@@ -63,6 +63,20 @@ describe('createChunker — Sätze aus dem Token-Strom', () => {
     expect(c.feed('Wirklich?')).toEqual(['Wirklich?'])
     expect(c.feed('! Ja klar.')).toEqual(['Ja klar.'])
   })
+
+  it('verwirft NUR reine Satzzeichen-Cluster, keine Symbole wie Emoji', () => {
+    const c = createChunker()
+    expect(c.feed('Text eins. 😀. Text zwei.')).toEqual([
+      'Text eins.', '😀.', 'Text zwei.',
+    ])
+  })
+
+  it('verwirft NUR reine Satzzeichen-Cluster, keine Währungs-/Mathezeichen', () => {
+    const c = createChunker()
+    expect(c.feed('Der Preis ist wichtig. $! Und weiter gehts.')).toEqual([
+      'Der Preis ist wichtig.', '$!', 'Und weiter gehts.',
+    ])
+  })
 })
 
 describe('createGate — die Sicherheits-Invariante', () => {
