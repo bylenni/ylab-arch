@@ -33,7 +33,9 @@ import { callModel, parseJson } from './llm.mjs'
 import {
   PROMPT_VERSION, TRIAGE_SYSTEM, MAIN_SYSTEM, SAFETY_SYSTEM, DEFAULT_JUDGE_RUBRIC,
   SCRIPTED_EMOTION, SCRIPTED_RISK, SCRIPTED_CLARIFY, SCRIPTED_FALLBACK,
+  OPENER_TEXTE, SCRIPTED_PIVOT,
 } from './prompts.mjs'
+import { runS2S } from './s2s.mjs'
 
 const PORT = process.env.API_PORT ?? 8787
 const execFileAsync = promisify(execFile)
@@ -465,6 +467,48 @@ async function loadModels() {
   return data
 }
 
+/** Synthetisiert Text zu WAV (Base64) mit Cache — von /api/tts und der s2s-Kette genutzt. */
+export async function synthesize(text) {
+  const voiceId = TTS_URL
+    ? `ext:${process.env.TTS_VOICE ?? 'default'}`
+    : piperAvailable()
+      ? `piper:${PIPER_VOICE}`
+      : 'say:Anna'
+  const ttsKey = createHash('sha256').update(`${voiceId}|${text}`).digest('hex')
+  const cacheFile = join(TTS_CACHE_DIR, `${ttsKey}.wav`)
+  if (existsSync(cacheFile)) {
+    cacheStats.ttsHits += 1
+    return { base64: (await readFile(cacheFile)).toString('base64'), engine: `⚡ Cache (${voiceId})`, cached: true }
+  }
+  cacheStats.ttsMisses += 1
+  let audio
+  let engine
+  if (TTS_URL) {
+    const ttsRes = await fetch(`${TTS_URL}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'tts', input: text, voice: process.env.TTS_VOICE ?? 'default', response_format: 'wav' }),
+    })
+    if (!ttsRes.ok) throw new Error(`TTS-Endpoint HTTP ${ttsRes.status}`)
+    audio = Buffer.from(await ttsRes.arrayBuffer())
+    engine = 'extern (TTS_URL)'
+  } else if (piperAvailable()) {
+    const outFile = await runPiper(text)
+    audio = await readFile(outFile)
+    await unlink(outFile).catch(() => {})
+    engine = `Piper ${PIPER_VOICE} (lokal, neuronal)`
+  } else {
+    const tmpFile = join(tmpdir(), `tts-${Date.now()}.wav`)
+    await execFileAsync('say', ['-v', 'Anna', '-o', tmpFile, '--data-format=LEI16@22050', text])
+    audio = await readFile(tmpFile)
+    await unlink(tmpFile).catch(() => {})
+    engine = 'macOS say „Anna" — Platzhalter'
+  }
+  await mkdir(TTS_CACHE_DIR, { recursive: true })
+  await writeFile(cacheFile, audio).catch(() => {})
+  return { base64: audio.toString('base64'), engine, cached: false }
+}
+
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -599,57 +643,10 @@ const server = http.createServer(async (req, res) => {
         return res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'text fehlt' }))
       }
       const started = performance.now()
-      let audio
-      let engine
-
-      // Cache-Key: Stimme + Engine-Version + exakter Text → identisches Audio
-      const voiceId = TTS_URL
-        ? `ext:${process.env.TTS_VOICE ?? 'default'}`
-        : piperAvailable()
-          ? `piper:${PIPER_VOICE}`
-          : 'say:Anna'
-      const ttsKey = createHash('sha256').update(`${voiceId}|${text}`).digest('hex')
-      const cacheFile = join(TTS_CACHE_DIR, `${ttsKey}.wav`)
-      if (existsSync(cacheFile)) {
-        cacheStats.ttsHits += 1
-        audio = await readFile(cacheFile)
-        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
-          JSON.stringify({
-            ok: true, audio: audio.toString('base64'),
-            ms: Math.round(performance.now() - started),
-            engine: `⚡ Cache (${voiceId})`, cached: true,
-          }),
-        )
-      }
-      cacheStats.ttsMisses += 1
-
-      if (TTS_URL) {
-        const ttsRes = await fetch(`${TTS_URL}/v1/audio/speech`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'tts', input: text, voice: process.env.TTS_VOICE ?? 'default', response_format: 'wav' }),
-        })
-        if (!ttsRes.ok) throw new Error(`TTS-Endpoint HTTP ${ttsRes.status}`)
-        audio = Buffer.from(await ttsRes.arrayBuffer())
-        engine = 'extern (TTS_URL)'
-      } else if (piperAvailable()) {
-        const outFile = await runPiper(text)
-        audio = await readFile(outFile)
-        await unlink(outFile).catch(() => {})
-        engine = `Piper ${PIPER_VOICE} (lokal, neuronal) — via TTS_URL gegen Orpheus/Kartoffel tauschbar`
-      } else {
-        const tmpFile = join(tmpdir(), `tts-${Date.now()}.wav`)
-        await execFileAsync('say', ['-v', 'Anna', '-o', tmpFile, '--data-format=LEI16@22050', text])
-        audio = await readFile(tmpFile)
-        await unlink(tmpFile).catch(() => {})
-        engine = 'macOS say „Anna" — Platzhalter'
-      }
-      // Ins Cache schreiben — erst nachdem die Synthese sicher gelungen ist
-      await mkdir(TTS_CACHE_DIR, { recursive: true })
-      await writeFile(cacheFile, audio)
+      const { base64, engine, cached } = await synthesize(text)
 
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
-        JSON.stringify({ ok: true, audio: audio.toString('base64'), ms: Math.round(performance.now() - started), engine, cached: false }),
+        JSON.stringify({ ok: true, audio: base64, ms: Math.round(performance.now() - started), engine, cached }),
       )
     } catch (err) {
       return res.writeHead(200, { 'Content-Type': 'application/json' }).end(
@@ -680,8 +677,50 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'POST' && req.url === '/api/s2s') {
+    const body = JSON.parse((await readBody(req)) || '{}')
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' })
+    const sende = (ereignis) => res.write(`${JSON.stringify(ereignis)}\n`)
+    try {
+      // STT zuerst — der Client schickt Audio, die Kette braucht Text
+      sende({ type: 'stage', key: 'stt', status: 'aktiv' })
+      const sttStart = Date.now()
+      const form = new FormData()
+      form.append('file', new Blob([Buffer.from(String(body.audio ?? ''), 'base64')], { type: 'audio/wav' }), 'audio.wav')
+      form.append('response_format', 'json')
+      const sttRes = await fetch(`${STT_URL}/inference`, { method: 'POST', body: form })
+      if (!sttRes.ok) throw new Error(`STT HTTP ${sttRes.status} — läuft \`npm run stt\`?`)
+      const utterance = String((await sttRes.json()).text ?? '').trim()
+      sende({ type: 'stage', key: 'stt', status: utterance ? 'fertig' : 'fehler', ms: Date.now() - sttStart, detail: utterance || 'nichts verstanden' })
+      sende({ type: 'transcript', text: utterance })
+      if (!utterance) {
+        const { base64 } = await synthesize(SCRIPTED_CLARIFY)
+        sende({ type: 'text', chunk: SCRIPTED_CLARIFY, index: -1 })
+        sende({ type: 'audio', wavBase64: base64, index: -1, kind: 'script' })
+        sende({ type: 'done', totalMs: Date.now() - sttStart, decision: 'unklar' })
+        return res.end()
+      }
+
+      const sessionId = String(body.sessionId ?? 's2s')
+      const learner = learnerStates.get(sessionId) ?? emptyLearnerState()
+      await runS2S({ ...body, utterance, learner, openerIndex: (body.history?.length ?? 0) }, sende, synthesize)
+      setLearnerState(sessionId, learner)
+      return res.end()
+    } catch (err) {
+      sende({ type: 'abort', grund: String(err.message ?? err) })
+      sende({ type: 'done', totalMs: 0, decision: 'fehler' })
+      return res.end()
+    }
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'Nicht gefunden' }))
 })
+
+// Kuratierte Sätze einmal vorsynthetisieren: Opener und Abbruch-Pivot sind damit
+// im Cache und kosten zur Laufzeit keine Wartezeit.
+for (const text of [...OPENER_TEXTE, SCRIPTED_PIVOT, SCRIPTED_RISK, SCRIPTED_EMOTION, SCRIPTED_CLARIFY]) {
+  synthesize(text).catch((err) => console.warn(`Vorsynthese fehlgeschlagen: ${String(err.message ?? err)}`))
+}
 
 server.listen(PORT, () => {
   console.log(`[api] Live-Pipeline auf http://localhost:${PORT} · Key: ${providerConfig('openrouter').key ? 'vorhanden' : 'FEHLT (.env)'}`)
