@@ -71,6 +71,13 @@ describe('createChunker — Sätze aus dem Token-Strom', () => {
     ])
   })
 
+  it('behält Flaggen-Emoji, da Regional-Indicator-Zeichen als Inhalt zählen', () => {
+    const c = createChunker()
+    expect(c.feed('Text eins. 🇩🇪. Text zwei.')).toEqual([
+      'Text eins.', '🇩🇪.', 'Text zwei.',
+    ])
+  })
+
   it('verwirft Chunks ohne vorlesbaren Inhalt (Symbolreste ohne Buchstabe/Ziffer/Emoji)', () => {
     const c = createChunker()
     expect(c.feed('Der Preis ist wichtig. $! Und weiter gehts.')).toEqual([

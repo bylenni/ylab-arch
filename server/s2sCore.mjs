@@ -47,7 +47,7 @@ export function createChunker() {
         const satz = puffer.slice(start, i + 1).trim()
         // Verwerfen, was keinen vorlesbaren Inhalt trägt (Satzzeichen- oder Symbolreste
         // an Stream-Grenzen) — Buchstaben, Ziffern und Emoji zählen als Inhalt.
-        if (/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(satz)) saetze.push(satz)
+        if (/[\p{L}\p{N}\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(satz)) saetze.push(satz)
         start = i + 1
       }
       puffer = puffer.slice(start)
