@@ -1,40 +1,39 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArchNode } from '../types'
 import { captureScenario, buildRunPayload } from '../scenarios'
 import { S2SSession } from '../lib/s2sSession'
 import type { S2SEreignis, SessionZustand } from '../lib/s2sSession'
+import { ANFANGS_VERLAUF, reduziereEreignis, type VerlaufZustand } from '../lib/s2sVerlauf'
 import { VoiceGlobe } from './VoiceGlobe'
 import { S2SDiagram } from './S2SDiagram'
 import type { StufenZustand } from './S2SDiagram'
 import { Button, Select } from './ui'
 
-interface Nachricht {
-  rolle: 'kind' | 'begleiter'
-  text: string
-}
-
 /** Splitscreen: links die live laufende Architektur, rechts Globe und Gesprächsverlauf. */
 export function S2SView({ nodes }: { nodes: ArchNode[] }) {
   const [zustand, setZustand] = useState<SessionZustand>('aus')
   const [stufen, setStufen] = useState<Record<string, StufenZustand>>({})
-  const [verlauf, setVerlauf] = useState<Nachricht[]>([])
+  const [verlaufZustand, setVerlaufZustand] = useState<VerlaufZustand>(ANFANGS_VERLAUF)
   const [ageBand, setAgeBand] = useState<'4-5' | '6-7'>('4-5')
   const [fehler, setFehler] = useState<string | null>(null)
   const [warteschlange, setWarteschlange] = useState(0)
   const sessionRef = useRef<S2SSession | null>(null)
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
-  // Der Opener ("Hmm, lass mich kurz überlegen …") ist pro Turn immer der ERSTE
-  // `text`-Chunk mit index: -1 — reine Denkzeit-Überbrückung, kein Gesprächsinhalt.
-  // Kuratierte Antworten (Skript-Pfad, Pivot beim Abbruch) tragen ebenfalls index: -1,
-  // kommen aber immer NACH dem Opener und sind echte Antworten, die im Verlauf
-  // erscheinen sollen. Da `S2SEreignis` bei `text` kein `kind` mitschickt (nur `audio`
-  // tut das), unterscheiden wir per Reihenfolge: das Flag wird bei jedem neuen Turn
-  // (Start der STT-Stufe) gesetzt und beim ersten `text`-Ereignis wieder gelöscht.
-  const openerAussteht = useRef(false)
+
+  // Verlässt die Nutzerin die Ansicht (Header-Wechsel zu Canvas/Arena/Prüfstand) während
+  // eine Session läuft, MUSS das Mikrofon sofort freigegeben werden — sonst laufen
+  // MediaStream, AudioContext und der offene /api/s2s-Stream unbegrenzt weiter. Bei einem
+  // Kinderprodukt ist ein "unsichtbar offenes Mikro" ein Vertrauens- und Datenschutzthema,
+  // kein bloßer Ressourcen-Leak.
+  useEffect(() => {
+    return () => {
+      sessionRef.current?.stop()
+      sessionRef.current = null
+    }
+  }, [])
 
   const verarbeite = useCallback((ereignis: S2SEreignis) => {
     if (ereignis.type === 'stage' && ereignis.key) {
-      if (ereignis.key === 'stt' && ereignis.status === 'aktiv') openerAussteht.current = true
       setStufen((alt) => ({
         ...alt,
         [ereignis.key!]: {
@@ -44,29 +43,17 @@ export function S2SView({ nodes }: { nodes: ArchNode[] }) {
         },
       }))
     }
-    if (ereignis.type === 'transcript' && ereignis.text) {
-      setVerlauf((alt) => [...alt, { rolle: 'kind', text: ereignis.text! }])
-    }
-    if (ereignis.type === 'text' && ereignis.chunk) {
-      const istOpenerFuellsatz = openerAussteht.current
-      openerAussteht.current = false
-      if (!istOpenerFuellsatz) {
-        setVerlauf((alt) => {
-          const letzte = alt[alt.length - 1]
-          if (letzte?.rolle === 'begleiter') {
-            return [...alt.slice(0, -1), { rolle: 'begleiter', text: `${letzte.text} ${ereignis.chunk}`.trim() }]
-          }
-          return [...alt, { rolle: 'begleiter', text: ereignis.chunk! }]
-        })
-      }
+    // Verlauf (Opener verwerfen, kuratierte Antworten übernehmen, Chunks zusammenführen)
+    // ist als reine Funktion ausgelagert (s2sVerlauf.ts) — dort auch die Begründung, warum
+    // eine Reihenfolge-Heuristik dafür nicht reicht.
+    if (ereignis.type === 'transcript' || ereignis.type === 'text' || ereignis.type === 'audio') {
+      setVerlaufZustand((alt) => reduziereEreignis(alt, ereignis))
     }
     // Audio-Puffer: zählt tatsächlich synthetisierte Audio-Chunks, nicht Text-Chunks —
     // `S2SSession` queued/spielt genau ein Element pro `audio`-Ereignis (inkl. Opener,
-    // Skript und Pivot). Der Brief zählte `text`-Ereignisse hoch; das läuft dem Text
-    // faktisch parallel (ein `text` pro `audio`), misst aber semantisch den Textstrom,
-    // nicht den Audio-Puffer. Eine echte "fertig abgespielt"-Rückmeldung gibt es aus der
-    // Session nicht, daher bleibt das eine Näherung: "wie viele Audio-Chunks sind für
-    // diesen Turn bislang eingetroffen", zurückgesetzt bei `done`/`abort`.
+    // Skript und Pivot). Eine echte "fertig abgespielt"-Rückmeldung gibt es aus der Session
+    // nicht, daher bleibt das eine Näherung: "wie viele Audio-Chunks sind für diesen Turn
+    // bislang eingetroffen", zurückgesetzt bei `done`/`abort`.
     if (ereignis.type === 'audio') setWarteschlange((n) => n + 1)
     if (ereignis.type === 'abort') {
       setFehler(`Abgebrochen: ${ereignis.grund ?? 'unbekannt'}`)
@@ -85,14 +72,26 @@ export function S2SView({ nodes }: { nodes: ArchNode[] }) {
       sessionRef.current.stop()
       sessionRef.current = null
       setAnalyser(null)
+      // Manueller Abbruch mitten in einem Turn darf keine eingefrorene Anzeige hinterlassen:
+      // ohne Reset bliebe z. B. "Haupt-LLM" dauerhaft als "aktiv" markiert und der
+      // Audio-Puffer auf dem letzten Stand vor dem Stopp stehen.
+      setStufen({})
+      setWarteschlange(0)
       return
     }
     setFehler(null)
     setStufen({})
+    // Erfolgreicher Start setzt onZustand mindestens einmal auf einen Nicht-"aus"-Wert
+    // (S2SSession.start() ruft es synchron mit 'hoert_zu' auf, bevor es zurückkehrt).
+    // Schlägt der Start fehl (z. B. Mikrofon verweigert), meldet start() das nur über
+    // onFehler und onZustand feuert nie — ohne dieses Flag bliebe ein toter Ref stehen,
+    // und der nächste Klick würde fälschlich in den Stop-Zweig laufen statt neu zu starten.
+    let gestartet = false
     const session = new S2SSession({
       payload,
       onEreignis: verarbeite,
       onZustand: (z) => {
+        if (z !== 'aus') gestartet = true
         setZustand(z)
         setAnalyser(sessionRef.current?.getAnalyser(z) ?? null)
       },
@@ -100,6 +99,10 @@ export function S2SView({ nodes }: { nodes: ArchNode[] }) {
     })
     sessionRef.current = session
     await session.start()
+    if (!gestartet) {
+      sessionRef.current = null
+      return
+    }
     setAnalyser(session.getAnalyser('hoert_zu'))
   }, [payload, verarbeite])
 
@@ -133,11 +136,11 @@ export function S2SView({ nodes }: { nodes: ArchNode[] }) {
         </div>
 
         <div className="max-h-[38%] min-h-0 overflow-y-auto border-t px-4 py-3">
-          {verlauf.length === 0 ? (
+          {verlaufZustand.verlauf.length === 0 ? (
             <p className="text-xs text-muted-foreground">Noch kein Gespräch.</p>
           ) : (
             <ul className="flex flex-col gap-2">
-              {verlauf.map((n, i) => (
+              {verlaufZustand.verlauf.map((n, i) => (
                 <li key={i} className="text-sm">
                   <span className="mr-2 font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground">
                     {n.rolle === 'kind' ? 'Kind' : '🧸'}

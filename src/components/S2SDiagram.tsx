@@ -38,8 +38,11 @@ export function S2SDiagram({ stufen, warteschlange }: Props) {
         <h2 className="font-mono text-[0.62rem] uppercase tracking-widest text-muted-foreground">
           Speech-to-Speech · live
         </h2>
+        {/* Zählt alle im laufenden Turn eingetroffenen Audio-Chunks (Näherung, keine
+            Rückmeldung über bereits Abgespieltes) — "Puffer" suggeriert fälschlich einen
+            wartenden Füllstand, der Wert läuft nur hoch. */}
         <span className="font-mono text-[0.62rem] text-muted-foreground">
-          Audio-Puffer: {warteschlange}
+          Audio-Chunks: {warteschlange}
         </span>
       </div>
 
