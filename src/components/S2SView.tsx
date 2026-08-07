@@ -1,16 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ArchNode } from '../types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ArchNode, ArchNodeData, NodeKind } from '../types'
 import { captureScenario, buildRunPayload } from '../scenarios'
 import { S2SSession } from '../lib/s2sSession'
 import type { S2SEreignis, SessionZustand } from '../lib/s2sSession'
 import { ANFANGS_VERLAUF, reduziereEreignis, type VerlaufZustand } from '../lib/s2sVerlauf'
 import { VoiceGlobe } from './VoiceGlobe'
 import { S2SDiagram } from './S2SDiagram'
-import type { StufenZustand } from './S2SDiagram'
+import type { ModellStufe, StufenZustand } from './S2SDiagram'
 import { Button, Select } from './ui'
 
+/** Ordnet eine der drei Modell-Stufen des s2s-Ereignisstroms der Canvas-Knotenart zu, die
+ *  dafür gepatcht wird. Reine Funktion (keine Server-/Canvas-Abhängigkeit), damit S2SView
+ *  ohne Rendering testbar bleibt — liegt hier statt in types.ts, weil die Zuordnung ein
+ *  Detail dieser Ansicht ist (welche Stufe bekommt ein Dropdown), keine allgemeine
+ *  Architektur-Regel. */
+export function nodeKindForStage(stageKey: string): NodeKind | null {
+  if (stageKey === 'triage') return 'triage'
+  if (stageKey === 'main') return 'llm'
+  if (stageKey === 'safety') return 'safety'
+  return null
+}
+
+const MODELL_STUFEN_KEYS = ['triage', 'main', 'safety'] as const
+
+interface Props {
+  nodes: ArchNode[]
+  onNodeChange: (id: string, patch: Partial<ArchNodeData>) => void
+}
+
 /** Splitscreen: links die live laufende Architektur, rechts Globe und Gesprächsverlauf. */
-export function S2SView({ nodes }: { nodes: ArchNode[] }) {
+export function S2SView({ nodes, onNodeChange }: Props) {
   const [zustand, setZustand] = useState<SessionZustand>('aus')
   const [stufen, setStufen] = useState<Record<string, StufenZustand>>({})
   const [verlaufZustand, setVerlaufZustand] = useState<VerlaufZustand>(ANFANGS_VERLAUF)
@@ -49,6 +68,7 @@ export function S2SView({ nodes }: { nodes: ArchNode[] }) {
           status: ereignis.status === 'aktiv' ? 'aktiv' : ereignis.status === 'fehler' ? 'fehler' : 'fertig',
           ms: ereignis.ms,
           detail: ereignis.detail,
+          model: ereignis.model,
         },
       }))
     }
@@ -149,10 +169,31 @@ export function S2SView({ nodes }: { nodes: ArchNode[] }) {
 
   const aktiv = zustand !== 'aus'
 
+  // Dropdown-Steuerung für triage/main/safety: Quelle der Wahrheit ist der Canvas-Knoten
+  // (nicht das zuletzt gemeldete `stufen[key].model` — das zeigt nur, was TATSÄCHLICH lief
+  // und kann kurz nach einer Umstellung noch den alten Wert tragen, siehe S2SDiagram).
+  // Fehlt der passende Knoten (Canvas ohne diese Komponente), bleibt der Eintrag weg —
+  // S2SDiagram zeigt die Stufe dann als reine Anzeige.
+  const modelStufen = useMemo(() => {
+    const ergebnis: Partial<Record<(typeof MODELL_STUFEN_KEYS)[number], ModellStufe>> = {}
+    for (const stageKey of MODELL_STUFEN_KEYS) {
+      const kind = nodeKindForStage(stageKey)
+      const node = kind ? nodes.find((n) => n.data.kind === kind) : undefined
+      if (!node) continue
+      ergebnis[stageKey] = {
+        configuredModel: node.data.config.model ?? '',
+        disabled: aktiv,
+        disabledTitle: aktiv ? 'Session läuft mit der Konfiguration vom Start — erst nach Sessionende änderbar' : undefined,
+        onChange: (model: string) => onNodeChange(node.id, { config: { ...node.data.config, model } }),
+      }
+    }
+    return ergebnis
+  }, [nodes, aktiv, onNodeChange])
+
   return (
     <div className="flex h-full min-h-0">
       <div className="min-w-0 flex-1 border-r">
-        <S2SDiagram stufen={stufen} warteschlange={warteschlange} />
+        <S2SDiagram stufen={stufen} warteschlange={warteschlange} modelStufen={modelStufen} />
       </div>
 
       <div className="flex w-[46%] min-w-0 flex-col">

@@ -23,6 +23,8 @@ export interface S2SEreignis {
   status?: 'aktiv' | 'fertig' | 'fehler'
   ms?: number
   detail?: string
+  /** Modell, mit dem diese Stufe tatsächlich lief (nur triage/main/safety/guard). */
+  model?: string
   text?: string
   chunk?: string
   index?: number

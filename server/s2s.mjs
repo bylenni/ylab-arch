@@ -84,7 +84,7 @@ export async function runS2S(opt, sende, synthesize) {
 
     // 2. Triage
     const triageStart = Date.now()
-    sende({ type: 'stage', key: 'triage', status: 'aktiv' })
+    sende({ type: 'stage', key: 'triage', status: 'aktiv', model: triageModel })
     const kontext = dialog.length
       ? `Bisheriger Dialog (zuletzt):\n${dialog.slice(-4).map((m) => `${m.role === 'assistant' ? 'Begleiter' : 'Kind'}: "${m.text.slice(0, 160)}"`).join('\n')}\n\n`
       : ''
@@ -95,6 +95,7 @@ export async function runS2S(opt, sende, synthesize) {
     const triage = parseJson(triageCall.text)
     sende({
       type: 'stage', key: 'triage', status: triage ? 'fertig' : 'fehler', ms: Date.now() - triageStart,
+      model: triageModel,
       detail: triage ? `Intent: ${triage.intent} · Risiko: ${triage.risiko} · Emotion: ${triage.emotion}` : 'Kein parsbares JSON → fail-closed',
     })
 
@@ -130,7 +131,7 @@ export async function runS2S(opt, sende, synthesize) {
     const muster = String(blockPatterns ?? '').split(',').map((w) => w.trim().toLowerCase()).filter(Boolean)
 
     // 5. LLM streamend + Chunker + gestaffelte Freigabe
-    sende({ type: 'stage', key: 'main', status: 'aktiv' })
+    sende({ type: 'stage', key: 'main', status: 'aktiv', model: mainModel })
     const chunker = createChunker()
     const wartende = []        // Chunks, die auf die Vollprüfung warten
 
@@ -176,7 +177,7 @@ export async function runS2S(opt, sende, synthesize) {
         // Erster Satz: ein Guard-Call auf dem kumulativen Präfix inkl. Kinderfrage.
         // Eigene lokale Variable — NICHT `kette` wiederverwenden (siehe Kommentar oben).
         const guardStart = Date.now()
-        sende({ type: 'stage', key: 'guard', status: 'aktiv' })
+        sende({ type: 'stage', key: 'guard', status: 'aktiv', model: safetyModel })
         const guardCall = callModel({
           model: safetyModel, system: SAFETY_SYSTEM,
           user: `Frage des Kindes (${ageBand} Jahre): "${utterance}"\n\nBisher geplanter Antwortanfang: "${satz}"`,
@@ -186,6 +187,7 @@ export async function runS2S(opt, sende, synthesize) {
         const frei = urteil?.freigabe === true
         sende({
           type: 'stage', key: 'guard', status: frei ? 'fertig' : 'fehler', ms: Date.now() - guardStart,
+          model: safetyModel,
           detail: frei ? 'Erster Satz freigegeben' : 'Erster Satz blockiert → Abbruch',
         })
         if (!frei) {
@@ -218,11 +220,11 @@ export async function runS2S(opt, sende, synthesize) {
     anKette(() => (rest ? verarbeite(rest) : undefined))
     await kette
     if (gate.status === 'abgebrochen') return
-    sende({ type: 'stage', key: 'main', status: 'fertig', ms, detail: `${tokens.out} Tokens generiert` })
+    sende({ type: 'stage', key: 'main', status: 'fertig', ms, model: mainModel, detail: `${tokens.out} Tokens generiert` })
 
     // 6. Vollprüfung der Gesamtantwort — gibt alle restlichen Chunks frei
     const safetyStart = Date.now()
-    sende({ type: 'stage', key: 'safety', status: 'aktiv' })
+    sende({ type: 'stage', key: 'safety', status: 'aktiv', model: safetyModel })
     const safetyCall = await callModel({
       model: safetyModel, system: SAFETY_SYSTEM,
       user: `Frage des Kindes (${ageBand} Jahre): "${utterance}"\n\nGeplante Antwort: "${gesamt}"`, maxTokens: 200,
@@ -231,6 +233,7 @@ export async function runS2S(opt, sende, synthesize) {
     const freigegeben = urteil?.freigabe === true
     sende({
       type: 'stage', key: 'safety', status: freigegeben ? 'fertig' : 'fehler', ms: Date.now() - safetyStart,
+      model: safetyModel,
       detail: freigegeben ? `Freigegeben (${urteil.kategorie})` : `Blockiert (${urteil?.kategorie ?? 'unparsbar'}) → Abbruch`,
     })
     if (!freigegeben) {

@@ -576,7 +576,7 @@ export default function App() {
       ) : view === 'pruefstand' ? (
         <Pruefstand nodes={nodes} />
       ) : view === 's2s' ? (
-        <S2SView nodes={nodes} />
+        <S2SView nodes={nodes} onNodeChange={patchNode} />
       ) : (
       <div className="flex min-h-0 flex-1 max-md:flex-col">
         <div className="relative min-w-0 flex-1">
