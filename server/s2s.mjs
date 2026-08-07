@@ -58,17 +58,23 @@ export async function runS2S(opt, sende, synthesize) {
   }
 
   /** Bricht ab: kein weiterer Antwort-Chunk, Pivot als letztes Wort.
-   *  Idempotent — ein zweiter Aufruf (z. B. Pattern-Treffer UND ein parallel bereits
-   *  werfender Guard-Call) darf nicht zweimal Pivot + `done` auslösen. */
-  let abbrechenGestartet = false
-  const abbrechen = async (grund) => {
-    if (abbrechenGestartet) return
-    abbrechenGestartet = true
+   *  Idempotent UND wartbar: ein zweiter Aufruf (z. B. ein Pattern-Treffer, während
+   *  zeitgleich `callModelStream` wirft und der äußere catch ebenfalls abbrechen()
+   *  ruft) bekommt dasselbe Promise zurück, statt sofort mit `undefined`
+   *  zurückzukehren. Ein reines Flag genügt hier NICHT: kehrt der zweite Aufruf sofort
+   *  zurück, während der erste noch auf die Pivot-TTS wartet, endet `runS2S` (und damit
+   *  `res.end()` im Handler) BEVOR der erste Aufruf sein Pivot-Audio/`done` gesendet
+   *  hat — der Client bekäme `abort` ohne Pivot und ohne `done` und würde bis zum
+   *  Socket-Close warten. Deshalb: `abbrechen` gibt immer dasselbe laufende Promise
+   *  zurück, jedes `await abbrechen(...)` wartet also auf die EINE tatsächliche
+   *  Abbruch-Abwicklung. */
+  let abbruchPromise = null
+  const abbrechen = (grund) => (abbruchPromise ??= (async () => {
     gate.reject(grund)
     sende({ type: 'abort', grund })
     await sendeKuratiert(SCRIPTED_PIVOT, 'pivot')
     sendeDone({ decision: 'abgebrochen' })
-  }
+  })())
 
   try {
     // 1. Opener — überbrückt die Denkzeit, inhaltlich leer, null Risiko

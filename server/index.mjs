@@ -689,10 +689,13 @@ const server = http.createServer(async (req, res) => {
       )
     }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' })
-    // Client kann die Verbindung jederzeit kappen — danach nie mehr schreiben,
-    // sonst erzeugt res.write() eine weitere unbehandelte Rejection.
+    // Client kann die Verbindung jederzeit kappen — danach nie mehr schreiben, sonst
+    // erzeugt res.write() eine weitere unbehandelte Rejection. Zwei Fälle, die beide
+    // abgedeckt sein müssen: die Antwort wurde regulär beendet (writableEnded) ODER
+    // der Client hat die Verbindung gekappt, bevor wir selbst res.end() gerufen haben
+    // (dann ist writableEnded noch false, aber destroyed bereits true).
     const sende = (ereignis) => {
-      if (res.writableEnded) return
+      if (res.writableEnded || res.destroyed) return
       res.write(`${JSON.stringify(ereignis)}\n`)
     }
     // Außerhalb des try deklariert, damit der Lernstand auch im Fehlerfall gesichert wird.
