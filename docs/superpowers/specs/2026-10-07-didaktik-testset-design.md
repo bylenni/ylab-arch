@@ -92,8 +92,10 @@ werden live erzeugt.
 Reine Funktionen ohne I/O und ohne Node-Abhängigkeiten. Sie werden vom CLI genutzt und
 können später unverändert in eine Prüfstand-UI übernommen werden.
 
-**Satzzerlegung:** Sätze trennen an `.`, `!`, `?` und `…`, jeweils gefolgt von Leerraum oder
-Textende. Ein Satz ist eine Frage, wenn er auf `?` endet.
+**Satzzerlegung:** nutzt `createChunker` aus `server/s2sCore.mjs`, also dieselben Satzregeln
+wie die Speech-Kette (Satzende an `.`, `!`, `?` mit folgendem Leerraum; Abkürzungen und
+Dezimalzahlen sind kein Satzende). Ein Rest ohne Satzzeichen zählt als eigener Satz.
+Ein Satz ist eine Frage, wenn er auf `?` endet.
 
 **Zahlerkennung:** nutzt `containsNumber` aus `server/teachingPlanner.mjs` (Ziffern und
 Zahlwörter 0–20, mit Wortgrenzen). Es gibt keine zweite Implementierung.
@@ -178,9 +180,13 @@ npm run eval:didaktik -- [--pipeline run|s2s|beide] [--runs N] [--klasse X] [--t
   Antwort ist `answer`, Entscheidung ist `decision`.
 - **Aufruf `/api/s2s`:** `{ text, ohneAudio: true, ageBand, sessionId, history, models }`.
   - Der Runner liest den NDJSON-Stream.
-  - Antwort = alle `text`-Chunks mit `kind ≠ 'opener'`, in Index-Reihenfolge verbunden.
+  - Antwort = alle `text`-Chunks mit `kind ≠ 'opener'`, in Sende-Reihenfolge verbunden.
     Kuratierte Skript- und Pivot-Sätze zählen mit, weil das Kind sie hört.
   - Entscheidung = `decision` aus `done`.
+  - **Fail-closed bei Abbrüchen:** `decision = 'fehler'` ist ein Fehler. `decision =
+    'abgebrochen'` ist nur dann eine gültige Antwort, wenn der Abbruchgrund von der
+    Safety-Kette stammt (Guard, Vollprüfung, Pattern-Treffer). Jeder andere Abbruch, etwa eine
+    Exception beim LLM-Aufruf, zählt als Fehler und nicht als Antwort.
 - **Fortschritt:** ein Zeichen pro Turn: `.` ok, `L` leak, `P` Lösung fehlt,
   `B` Falschbestätigung, `S` Personenlob, `E` Fehler.
 - **Ausgabe:**
@@ -206,9 +212,10 @@ Abwärtskompatibel. Der Client der Speech-Ansicht bleibt unverändert lauffähig
    TTS-Last und keine Abhängigkeit von Piper.
 3. **`kind` an `text`-Ereignissen** (`server/s2s.mjs`):
    - Kuratierte Texte tragen ihren `kind` (`opener`, `script`, `pivot`).
-   - LLM-Chunks tragen `kind: 'antwort'`.
+   - LLM-Chunks tragen `kind: 'answer'`, wie die zugehörigen Audio-Ereignisse.
    - Der Leer-Äußerungs-Zweig in `index.mjs` sendet `kind: 'script'`.
-   - `S2SEreignis` in `src/lib/s2sSession.ts` bekommt das optionale Feld.
+   - `S2SEreignis` in `src/lib/s2sSession.ts` hat das optionale Feld `kind` mit genau diesen
+     Werten bereits; dort ist keine Änderung nötig.
 
 ## 5 · Absicherung
 
